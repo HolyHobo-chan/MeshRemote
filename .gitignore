@@ -1,0 +1,17 @@
+# Xcode / build artifacts
+build/
+DerivedData/
+*.ipa
+*.xcarchive
+
+# Xcode user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# macOS
+.DS_Store
