@@ -2,29 +2,21 @@
 
 A native iOS management app for [MeshCentral](https://meshcentral.com). Browse your
 devices, control them with remote desktop, open SSH terminals, transfer files, and
-send power commands — from your iPhone or iPad.
+send power commands.
 
-Built with SwiftUI (iOS 17+). The MeshCentral wire protocols (control channel, KVM
-remote desktop, SSH relay, file transfer) are implemented natively in Swift; the SSH
-terminal renders with [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
+Built with SwiftUI. The MeshCentral wire protocols are implemented natively in Swift; the SSH
+terminal uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
 
 ## Features
 
-- **Servers** — multiple saved servers, passwords in the iOS Keychain, self-signed
-  certificate support (opt-in per server), optional 2FA code at login, and an
-  optional auto-connect server that signs in as soon as the app launches
-- **Devices** — live device list grouped by device group, online/offline status
-  updated in realtime, search, online/offline filter
-- **Remote Desktop** — native decoding of MeshCentral's tile protocol
-  (JPEG/jumbo frames) with trackpad-style control: slide a finger to move the
-  on-screen cursor, tap to click at the cursor, double-tap to double-click,
-  two-finger tap for right-click, long-press then slide to drag, two-finger
-  slide to scroll, pinch to zoom (the view follows the cursor). On-screen
-  keyboard with modifier keys (Ctrl/Alt/Shift/Win), F-keys, arrows,
-  Ctrl-Alt-Del, quality presets, multi-display switching
-- **SSH** — full terminal emulation via the server's SSH relay, with optional
-  server-side credential storage
-- **Files** — browse drives/folders, download (share sheet), upload from the
+- **Servers** — Multiple Server Profiles. Have multiple mesh central servers?
+  Great! You can add all of them.
+- **Devices** — View all of your devices and their online/offline status.
+- **Remote Desktop** — Native decoding of MeshCentral's tile protocol
+  with trackpad-style controls.
+- **SSH** — Full terminal emulation via the server's SSH relay, with optional
+  server side credential storage
+- **Files** — Browse drives/folders, download files, upload from the
   Files app, rename/delete/new folder, transfer progress
 - **Power** — Wake-on-LAN, restart, sleep, power off
 
@@ -34,14 +26,6 @@ terminal renders with [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
   `xcodebuild -downloadComponent MetalToolchain` if Xcode asks for it)
 - A MeshCentral server. SSH sessions additionally require `"ssh": true` in the
   domain section of the server's `config.json`.
-
-## Building and installing on your iPhone
-
-1. Open `MeshRemote.xcodeproj` in Xcode.
-2. Select the **MeshRemote** target → *Signing & Capabilities* → choose your team
-   (a free Apple ID works; change the bundle identifier if it collides).
-3. Plug in your iPhone, pick it as the run destination, and hit **Run**.
-4. On a free provisioning profile the app expires after 7 days — just build again.
 
 First launch: tap **+**, enter your server (e.g. `server.example.com` or
 `host:port`), username and password. Toggle *Allow self-signed certificate* if your
@@ -81,3 +65,11 @@ The MeshCentral wire formats this app implements are documented in [docs/](docs/
 - App Transport Security is relaxed (`NSAllowsArbitraryLoads`) because MeshCentral
   servers frequently use self-signed certificates; certificate trust is still
   enforced per-server unless you enable the override.
+
+
+## AI Disclosure
+ 
+A majority of the code in this project was written using Claude AI with a human review. 
+Icons and descriptions were human made. I used this project to help me learn the Swift 
+language while making something genuinely useful. I personally use this app a lot and 
+have found it to be a great tool to manage my homelab. Hope you enjoy!
