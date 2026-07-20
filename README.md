@@ -27,7 +27,9 @@ terminal uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
 - A MeshCentral server. SSH sessions additionally require `"ssh": true` in the
   domain section of the server's `config.json`.
 
-First launch: tap **+**, enter your server (e.g. `server.example.com` or
+## First launch: 
+
+- tap **+**, enter your server (e.g. `server.example.com` or
 `host:port`), username and password. Toggle *Allow self-signed certificate* if your
 server doesn't have a public TLS certificate.
 
