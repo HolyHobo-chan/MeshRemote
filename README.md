@@ -20,12 +20,17 @@ terminal uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
   Files app, rename/delete/new folder, transfer progress
 - **Power** — Wake-on-LAN, restart, sleep, power off
 
-## Requirements
+## Build Requirements
 
 - Xcode 16 or newer (SwiftTerm's Metal renderer also needs the Metal toolchain:
   `xcodebuild -downloadComponent MetalToolchain` if Xcode asks for it)
 - A MeshCentral server. SSH sessions additionally require `"ssh": true` in the
   domain section of the server's `config.json`.
+
+## Installation
+- There is a release IPA you can download from the [SwiftTerm](https://github.com/HolyHobo-chan/MeshRemote/releases). For now you should use
+a tool like altstore or sidestore to install. I may release this on the appstore if
+there is enough demand, but for now it's best to sideload.
 
 ## First launch: 
 
