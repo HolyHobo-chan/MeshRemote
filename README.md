@@ -28,7 +28,7 @@ terminal uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
   domain section of the server's `config.json`.
 
 ## Installation
-- There is a release IPA you can download from the [SwiftTerm](https://github.com/HolyHobo-chan/MeshRemote/releases). For now you should use
+- There is a release IPA you can download from the [here](https://github.com/HolyHobo-chan/MeshRemote/releases). For now you should use
 a tool like altstore or sidestore to install. I may release this on the appstore if
 there is enough demand, but for now it's best to sideload.
 
