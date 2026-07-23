@@ -1,6 +1,12 @@
 import Foundation
 
-/// A saved MeshCentral server. Passwords live in the Keychain, keyed by profile id.
+/// How a saved server signs in.
+enum AuthMethod: String, Codable {
+    case password   // local account: username + password via x-meshauth
+    case sso        // external/SSO account: browser login, session cookie
+}
+
+/// A saved MeshCentral server. Passwords/session cookies live in the Keychain, keyed by profile id.
 struct ServerProfile: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var displayName: String = ""
@@ -9,17 +15,20 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     var allowSelfSigned: Bool = false
     var urlKey: String = ""          // domain loginkey (?key=), rarely used
     var autoConnect: Bool = false    // connect to this server on app launch
+    var authMethod: AuthMethod = .password
 
     init() {}
 
     init(displayName: String, host: String, username: String,
-         allowSelfSigned: Bool, urlKey: String = "", autoConnect: Bool = false) {
+         allowSelfSigned: Bool, urlKey: String = "", autoConnect: Bool = false,
+         authMethod: AuthMethod = .password) {
         self.displayName = displayName
         self.host = host
         self.username = username
         self.allowSelfSigned = allowSelfSigned
         self.urlKey = urlKey
         self.autoConnect = autoConnect
+        self.authMethod = authMethod
     }
 
     // Tolerant decoding: profiles saved before a field existed still load.
@@ -32,6 +41,7 @@ struct ServerProfile: Identifiable, Codable, Hashable {
         allowSelfSigned = try c.decodeIfPresent(Bool.self, forKey: .allowSelfSigned) ?? false
         urlKey = try c.decodeIfPresent(String.self, forKey: .urlKey) ?? ""
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
+        authMethod = try c.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .password
     }
 
     var baseURL: URL? {
@@ -55,12 +65,46 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     }
 
     var keychainAccount: String { "server-\(id.uuidString)" }
+    private var cookieAccount: String { "cookie-\(id.uuidString)" }
+    private var tokenUserAccount: String { "tokuser-\(id.uuidString)" }
+    private var tokenPassAccount: String { "tokpass-\(id.uuidString)" }
 
     var password: String? {
         get { KeychainStore.password(account: keychainAccount) }
         nonmutating set {
             if let newValue { KeychainStore.setPassword(newValue, account: keychainAccount) }
             else { KeychainStore.deletePassword(account: keychainAccount) }
+        }
+    }
+
+    /// The captured MeshCentral session-cookie header for SSO logins
+    /// (e.g. "xid=…; xid.sig=…"). Short-lived — used only to bootstrap a login
+    /// token. Stored in the Keychain like a password.
+    var sessionCookie: String? {
+        get { KeychainStore.password(account: cookieAccount) }
+        nonmutating set {
+            if let newValue { KeychainStore.setPassword(newValue, account: cookieAccount) }
+            else { KeychainStore.deletePassword(account: cookieAccount) }
+        }
+    }
+
+    /// A durable MeshCentral login token (username `~t:…` + password) minted after
+    /// an SSO sign-in, so the app doesn't have to prompt again. Revocable from the
+    /// MeshCentral web UI. The two halves are stored as separate Keychain items.
+    var loginToken: (user: String, pass: String)? {
+        get {
+            guard let user = KeychainStore.password(account: tokenUserAccount),
+                  let pass = KeychainStore.password(account: tokenPassAccount) else { return nil }
+            return (user, pass)
+        }
+        nonmutating set {
+            if let newValue {
+                KeychainStore.setPassword(newValue.user, account: tokenUserAccount)
+                KeychainStore.setPassword(newValue.pass, account: tokenPassAccount)
+            } else {
+                KeychainStore.deletePassword(account: tokenUserAccount)
+                KeychainStore.deletePassword(account: tokenPassAccount)
+            }
         }
     }
 }
@@ -84,6 +128,8 @@ final class ProfileStore {
 
     static func delete(_ profile: ServerProfile) {
         KeychainStore.deletePassword(account: profile.keychainAccount)
+        profile.sessionCookie = nil
+        profile.loginToken = nil   // clears both token Keychain items
         var profiles = load()
         profiles.removeAll { $0.id == profile.id }
         save(profiles)

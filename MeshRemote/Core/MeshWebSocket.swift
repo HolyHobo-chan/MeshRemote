@@ -38,10 +38,15 @@ final class MeshWebSocket: NSObject, @unchecked Sendable {
         let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 20
+        // Don't let URLSession's own cookie store add/override cookies — when we
+        // pass an explicit Cookie header (SSO session auth), it must go verbatim.
+        config.httpShouldSetCookies = false
+        config.httpCookieStorage = nil
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         self.session = session
 
         var request = URLRequest(url: url)
+        request.httpShouldHandleCookies = false
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 32 * 1024 * 1024

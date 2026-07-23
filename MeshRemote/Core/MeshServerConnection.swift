@@ -54,13 +54,65 @@ final class MeshServerConnection {
     // one request instead of racing (and stranding) separate continuations.
     private var cookieFetch: Task<(auth: String, rauth: String), Error>?
 
+    // Awaits a createLoginToken response.
+    private var tokenWaiter: CheckedContinuation<(user: String, pass: String)?, Never>?
+
     init(profile: ServerProfile) {
         self.profile = profile
     }
 
     // MARK: - Connect / disconnect
 
+    /// Local-account login: username + password (+ optional 2FA token) via x-meshauth.
     func connect(password: String, token: String? = nil) async throws {
+        var authValue = "\(Data(profile.username.utf8).base64EncodedString()),\(Data(password.utf8).base64EncodedString())"
+        if let token, !token.isEmpty {
+            authValue += ",\(Data(token.utf8).base64EncodedString())"
+        }
+        try await connect(authHeaders: ["x-meshauth": authValue])
+    }
+
+    /// External/SSO login: authenticate with a captured MeshCentral session
+    /// cookie (e.g. "xid=…; xid.sig=…"). control.ashx accepts the session cookie
+    /// directly, so no password is involved. Short-lived — used to bootstrap a token.
+    func connect(sessionCookie: String) async throws {
+        try await connect(authHeaders: ["Cookie": sessionCookie])
+    }
+
+    /// Durable login-token auth: a `~t:…` token username + its password, sent the
+    /// same way as a normal login. Survives SSO session expiry.
+    func connect(tokenUser: String, tokenPass: String) async throws {
+        let authValue = "\(Data(tokenUser.utf8).base64EncodedString()),\(Data(tokenPass.utf8).base64EncodedString())"
+        try await connect(authHeaders: ["x-meshauth": authValue])
+    }
+
+    /// Returns true if the given session cookie authenticates against
+    /// control.ashx. Used by the SSO web-login flow to detect when the user has
+    /// finished signing in (the real auth is the only reliable success signal).
+    static func validateSessionCookie(_ cookie: String, profile: ServerProfile) async -> Bool {
+        guard let url = profile.websocketURL(path: "control.ashx") else { return false }
+        let socket = MeshWebSocket(url: url, headers: ["Cookie": cookie],
+                                   allowSelfSigned: profile.allowSelfSigned)
+        defer { socket.close() }
+        do {
+            try await socket.connect()
+            let watchdog = Task { try? await Task.sleep(for: .seconds(8)); socket.close() }
+            defer { watchdog.cancel() }
+            while true {
+                let message = try await socket.receive()
+                guard case .text(let text) = message, let json = parseJSON(text) else { continue }
+                switch json["action"] as? String {
+                case "userinfo": return true      // authenticated
+                case "close": return false        // rejected (not signed in yet)
+                default: continue
+                }
+            }
+        } catch {
+            return false
+        }
+    }
+
+    private func connect(authHeaders: [String: String]) async throws {
         guard state != .connecting else { return }
         guard let url = profile.websocketURL(path: "control.ashx") else {
             throw MeshError.badServerAddress
@@ -68,13 +120,8 @@ final class MeshServerConnection {
         state = .connecting
         lastError = nil
 
-        var authValue = "\(Data(profile.username.utf8).base64EncodedString()),\(Data(password.utf8).base64EncodedString())"
-        if let token, !token.isEmpty {
-            authValue += ",\(Data(token.utf8).base64EncodedString())"
-        }
-
         let socket = MeshWebSocket(url: url,
-                                   headers: ["x-meshauth": authValue],
+                                   headers: authHeaders,
                                    allowSelfSigned: profile.allowSelfSigned)
         self.socket = socket
 
@@ -190,6 +237,7 @@ final class MeshServerConnection {
         cookieRefreshTask = nil
         heartbeatTask = nil
         invalidateCookies()
+        if let waiter = tokenWaiter { tokenWaiter = nil; waiter.resume(returning: nil) }
         socket?.close()
         socket = nil
     }
@@ -255,6 +303,15 @@ final class MeshServerConnection {
         case "authcookie":
             authCookie = json["cookie"] as? String
             rCookie = json["rcookie"] as? String
+        case "createLoginToken":
+            if let waiter = tokenWaiter {
+                tokenWaiter = nil
+                if let user = json["tokenUser"] as? String, let pass = json["tokenPass"] as? String {
+                    waiter.resume(returning: (user, pass))
+                } else {
+                    waiter.resume(returning: nil)   // server refused (result: error)
+                }
+            }
         case "event":
             if let event = json["event"] as? [String: Any] {
                 handleEvent(event)
@@ -318,6 +375,22 @@ final class MeshServerConnection {
     /// them over the network (e.g. SSH), so they must not be treated as offline.
     func isLocalDevice(_ node: MeshNode) -> Bool {
         meshes.first { $0.id == node.meshId }?.mtype == 3
+    }
+
+    /// Asks the server to mint a durable login token for this account, so the app
+    /// can reconnect without signing in again. Returns nil if the server refuses
+    /// (e.g. login tokens disabled) or times out — the caller then falls back to
+    /// the session cookie. `expire: 0` means the token never expires.
+    func createLoginToken(name: String = "Mesh Remote (iOS)") async -> (user: String, pass: String)? {
+        guard state == .connected, tokenWaiter == nil else { return nil }
+        return await withCheckedContinuation { cont in
+            tokenWaiter = cont
+            Task { try? await sendJSON(["action": "createLoginToken", "name": name, "expire": 0]) }
+            Task {
+                try? await Task.sleep(for: .seconds(10))
+                if let waiter = tokenWaiter { tokenWaiter = nil; waiter.resume(returning: nil) }
+            }
+        }
     }
 
     func wake(nodeId: String) async throws {

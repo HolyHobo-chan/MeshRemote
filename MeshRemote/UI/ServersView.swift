@@ -10,6 +10,7 @@ struct ServersView: View {
     @State private var connectError: String?
     @State private var passwordPrompt: ServerProfile?
     @State private var promptedPassword = ""
+    @State private var ssoProfile: ServerProfile?   // presenting the SSO web login (re-auth)
 
     var body: some View {
         NavigationStack {
@@ -35,8 +36,9 @@ struct ServersView: View {
                     app.profiles.append(profile)
                     if profile.autoConnect { app.setAutoConnect(true, for: profile) }
                     app.saveProfiles()
-                    // Empty password means "don't save" — clear any stored one.
-                    profile.password = password.isEmpty ? nil : password
+                    if profile.authMethod == .password {
+                        profile.password = password.isEmpty ? nil : password
+                    }
                 }
             }
             .sheet(item: $editingProfile) { profile in
@@ -46,7 +48,15 @@ struct ServersView: View {
                     }
                     if updated.autoConnect { app.setAutoConnect(true, for: updated) }
                     app.saveProfiles()
-                    updated.password = password.isEmpty ? nil : password
+                    if updated.authMethod == .password {
+                        updated.password = password.isEmpty ? nil : password
+                    }
+                }
+            }
+            .sheet(item: $ssoProfile) { profile in
+                SSOLoginView(profile: profile) { cookie in
+                    profile.sessionCookie = cookie
+                    connectSSO(profile, cookie: cookie)
                 }
             }
             .task { autoConnectIfWanted() }
@@ -101,11 +111,7 @@ struct ServersView: View {
         List {
             ForEach(app.profiles) { profile in
                 Button {
-                    if let password = profile.password, !password.isEmpty {
-                        connect(profile, password: password)
-                    } else {
-                        passwordPrompt = profile
-                    }
+                    startConnect(profile)
                 } label: {
                     HStack(spacing: 14) {
                         Image("ServerGlyph")
@@ -125,7 +131,7 @@ struct ServersView: View {
                                         .foregroundStyle(Color.accentColor)
                                 }
                             }
-                            Text("\(profile.username) · \(profile.host)")
+                            Text(subtitle(for: profile))
                                 .font(.caption)
                                 .foregroundStyle(Color.secondary)
                         }
@@ -156,15 +162,55 @@ struct ServersView: View {
         .listStyle(.insetGrouped)
     }
 
-    /// Once per launch: if a server is marked auto-connect and has a stored
-    /// password, sign in without a tap.
+    private func subtitle(for profile: ServerProfile) -> String {
+        switch profile.authMethod {
+        case .password:
+            return "\(profile.username) · \(profile.host)"
+        case .sso:
+            return "SSO · \(profile.host)"
+        }
+    }
+
+    // MARK: - Connect dispatch
+
+    private func startConnect(_ profile: ServerProfile) {
+        switch profile.authMethod {
+        case .password:
+            if let password = profile.password, !password.isEmpty {
+                connect(profile, password: password)
+            } else {
+                passwordPrompt = profile
+            }
+        case .sso:
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)
+            } else if let cookie = profile.sessionCookie, !cookie.isEmpty {
+                connectSSO(profile, cookie: cookie)
+            } else {
+                ssoProfile = profile   // never signed in / no stored session
+            }
+        }
+    }
+
+    /// Once per launch: if a server is marked auto-connect and has stored
+    /// credentials (password or SSO session), sign in without a tap.
     private func autoConnectIfWanted() {
         guard !app.hasAttemptedAutoConnect else { return }
         app.hasAttemptedAutoConnect = true
         guard app.connection == nil,
-              let profile = app.profiles.first(where: \.autoConnect),
-              let password = profile.password, !password.isEmpty else { return }
-        connect(profile, password: password)
+              let profile = app.profiles.first(where: \.autoConnect) else { return }
+        switch profile.authMethod {
+        case .password:
+            if let password = profile.password, !password.isEmpty {
+                connect(profile, password: password)
+            }
+        case .sso:
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)
+            } else if let cookie = profile.sessionCookie, !cookie.isEmpty {
+                connectSSO(profile, cookie: cookie)
+            }
+        }
     }
 
     private func connect(_ profile: ServerProfile, password: String) {
@@ -187,6 +233,45 @@ struct ServersView: View {
             }
         }
     }
+
+    private func connectSSO(_ profile: ServerProfile, cookie: String) {
+        connectingProfile = profile
+        let connection = MeshServerConnection(profile: profile)
+        Task {
+            defer { connectingProfile = nil }
+            do {
+                try await connection.connect(sessionCookie: cookie)
+                // Upgrade the short-lived session into a durable login token so
+                // we won't need to sign in again. Falls back to the cookie if the
+                // server has login tokens disabled.
+                if let token = await connection.createLoginToken() {
+                    profile.loginToken = token
+                    profile.sessionCookie = nil
+                }
+                app.connection = connection
+            } catch {
+                // The saved session likely expired — clear it and prompt a fresh sign-in.
+                profile.sessionCookie = nil
+                ssoProfile = profile
+            }
+        }
+    }
+
+    private func connectToken(_ profile: ServerProfile, token: (user: String, pass: String)) {
+        connectingProfile = profile
+        let connection = MeshServerConnection(profile: profile)
+        Task {
+            defer { connectingProfile = nil }
+            do {
+                try await connection.connect(tokenUser: token.user, tokenPass: token.pass)
+                app.connection = connection
+            } catch {
+                // Token revoked or invalid — clear it and require a fresh sign-in.
+                profile.loginToken = nil
+                ssoProfile = profile
+            }
+        }
+    }
 }
 
 /// Add / edit server form.
@@ -202,8 +287,10 @@ struct ServerFormView: View {
     @State private var allowSelfSigned = false
     @State private var savePassword = true
     @State private var autoConnect = false
+    @State private var authMethod: AuthMethod = .password
     @State private var connecting = false
     @State private var connectError: String?
+    @State private var pendingSSOProfile: ServerProfile?
 
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -219,27 +306,49 @@ struct ServerFormView: View {
                         .autocorrectionDisabled()
                         .textContentType(.URL)
                 }
-                Section("Account") {
-                    TextField("Username", text: $username)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                    TextField("Two-factor code (if required)", text: $twoFactorCode)
-                        .keyboardType(.numberPad)
-                }
+
                 Section {
-                    Toggle("Save password", isOn: $savePassword)
-                        .onChange(of: savePassword) { _, saves in
-                            if !saves { autoConnect = false }
-                        }
-                    Toggle("Connect automatically on launch", isOn: $autoConnect)
-                        .disabled(!savePassword)
-                    Toggle("Allow self-signed certificate", isOn: $allowSelfSigned)
+                    Picker("Sign-in method", selection: $authMethod) {
+                        Text("Password").tag(AuthMethod.password)
+                        Text("Single Sign-On").tag(AuthMethod.sso)
+                    }
                 } footer: {
-                    Text("Passwords are stored in the iOS Keychain. Automatic connection requires a saved password and applies to one server at a time. Enable the certificate option only for servers you trust — most self-hosted MeshCentral servers use a self-signed certificate.")
+                    Text(authMethod == .sso
+                         ? "Use this if your MeshCentral account signs in through an external provider (Microsoft, Google, OIDC, SAML, etc.). You'll sign in through your server's web page."
+                         : "Use this for a local MeshCentral account with a username and password.")
                 }
+
+                if authMethod == .password {
+                    Section("Account") {
+                        TextField("Username", text: $username)
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        SecureField("Password", text: $password)
+                            .textContentType(.password)
+                        TextField("Two-factor code (if required)", text: $twoFactorCode)
+                            .keyboardType(.numberPad)
+                    }
+                    Section {
+                        Toggle("Save password", isOn: $savePassword)
+                            .onChange(of: savePassword) { _, saves in
+                                if !saves { autoConnect = false }
+                            }
+                        Toggle("Connect automatically on launch", isOn: $autoConnect)
+                            .disabled(!savePassword)
+                        Toggle("Allow self-signed certificate", isOn: $allowSelfSigned)
+                    } footer: {
+                        Text("Passwords are stored in the iOS Keychain. Automatic connection requires a saved password and applies to one server at a time. Enable the certificate option only for servers you trust — most self-hosted MeshCentral servers use a self-signed certificate.")
+                    }
+                } else {
+                    Section {
+                        Toggle("Connect automatically on launch", isOn: $autoConnect)
+                        Toggle("Allow self-signed certificate", isOn: $allowSelfSigned)
+                    } footer: {
+                        Text("Your session is stored securely in the iOS Keychain after you sign in. If it expires, you'll be asked to sign in again.")
+                    }
+                }
+
                 if let connectError {
                     Section {
                         Label(connectError, systemImage: "exclamationmark.triangle.fill")
@@ -257,10 +366,18 @@ struct ServerFormView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if connecting {
                         ProgressView()
+                    } else if authMethod == .sso {
+                        Button("Sign In") { pendingSSOProfile = buildProfile() }
+                            .disabled(host.isEmpty)
                     } else {
                         Button("Connect") { connectAndSave() }
                             .disabled(host.isEmpty || username.isEmpty || password.isEmpty)
                     }
+                }
+            }
+            .sheet(item: $pendingSSOProfile) { profile in
+                SSOLoginView(profile: profile) { cookie in
+                    completeSSO(profile, cookie: cookie)
                 }
             }
             .onAppear {
@@ -270,23 +387,29 @@ struct ServerFormView: View {
                     username = existing.username
                     allowSelfSigned = existing.allowSelfSigned
                     autoConnect = existing.autoConnect
+                    authMethod = existing.authMethod
                     let stored = existing.password
                     password = stored ?? ""
-                    // Reflect reality: "Save password" on only if one is stored.
                     savePassword = stored != nil
                 }
             }
         }
     }
 
-    private func connectAndSave() {
+    /// Builds a profile from the current form fields (without touching the Keychain).
+    private func buildProfile() -> ServerProfile {
         var profile = existing ?? ServerProfile()
         profile.displayName = displayName
         profile.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.allowSelfSigned = allowSelfSigned
-        profile.autoConnect = autoConnect && savePassword
+        profile.authMethod = authMethod
+        profile.autoConnect = autoConnect && (authMethod == .sso || savePassword)
+        return profile
+    }
 
+    private func connectAndSave() {
+        let profile = buildProfile()
         connecting = true
         connectError = nil
         let connection = MeshServerConnection(profile: profile)
@@ -304,6 +427,31 @@ struct ServerFormView: View {
                 } else {
                     connectError = error.localizedDescription
                 }
+            }
+        }
+    }
+
+    /// The SSO web login succeeded and handed back a session cookie. `profile` is
+    /// the same instance the web view used, so its id (and Keychain items) are stable.
+    private func completeSSO(_ profile: ServerProfile, cookie: String) {
+        profile.sessionCookie = cookie          // store in Keychain
+        onSave(profile, "")                     // persist the profile
+        connecting = true
+        connectError = nil
+        let connection = MeshServerConnection(profile: profile)
+        Task {
+            defer { connecting = false }
+            do {
+                try await connection.connect(sessionCookie: cookie)
+                // Mint a durable login token so future launches skip the web login.
+                if let token = await connection.createLoginToken() {
+                    profile.loginToken = token
+                    profile.sessionCookie = nil
+                }
+                app.connection = connection
+                dismiss()
+            } catch {
+                connectError = "Signed in, but couldn't open a session. Please try again."
             }
         }
     }

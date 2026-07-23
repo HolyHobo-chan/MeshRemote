@@ -1,5 +1,6 @@
 # Xcode / build artifacts
 build/
+.build-sim/
 DerivedData/
 *.ipa
 *.xcarchive

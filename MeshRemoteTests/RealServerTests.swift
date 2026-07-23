@@ -44,6 +44,28 @@ final class RealServerTests: XCTestCase {
         connection.nodes.values.first { $0.name == name && $0.hasAgent }
     }
 
+    func testLoginTokenRoundTrip() async throws {
+        guard let config = Config.fromEnvironment() else { throw XCTSkip("No live-server config in environment.") }
+        let profile = ServerProfile(displayName: "live", host: config.host,
+                                    username: config.user, allowSelfSigned: true)
+
+        // 1. Log in with password, mint a login token.
+        let c1 = MeshServerConnection(profile: profile)
+        try await c1.connect(password: config.pass)
+        let token = await c1.createLoginToken(name: "MeshRemote Test")
+        c1.disconnect()
+        guard let token else { return XCTFail("createLoginToken returned nil (server refused?)") }
+        print("LIVE: minted token user=\(token.user)")
+
+        // 2. Reconnect using ONLY the token — this is the reconnect path.
+        let c2 = MeshServerConnection(profile: profile)
+        try await c2.connect(tokenUser: token.user, tokenPass: token.pass)
+        XCTAssertEqual(c2.state, .connected, "Token auth failed to connect")
+        XCTAssertNotNil(c2.userInfo, "Token auth connected but no userinfo")
+        print("LIVE: token auth OK — userinfo=\(c2.userInfo?.name ?? "nil")")
+        c2.disconnect()
+    }
+
     func testLiveLoginAndDeviceList() async throws {
         guard let config = Config.fromEnvironment() else { throw XCTSkip("No live-server config in environment.") }
         let connection = try await connect(config)
