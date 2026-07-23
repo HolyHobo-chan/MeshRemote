@@ -18,7 +18,7 @@ struct SSOLoginView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                if let url = profile.baseURL {
+                if let url = profile.loginPageURL {
                     SSOWebView(url: url,
                                allowSelfSigned: profile.allowSelfSigned,
                                profile: profile,

@@ -66,6 +66,32 @@ final class RealServerTests: XCTestCase {
         c2.disconnect()
     }
 
+    func testLiveAgentTerminal() async throws {
+        guard let config = Config.fromEnvironment() else { throw XCTSkip("No live-server config in environment.") }
+        let connection = try await connect(config)
+        defer { connection.disconnect() }
+        guard let node = onlineAgentNode(connection, named: config.nodeName) else {
+            throw XCTSkip("Node \(config.nodeName) not online.")
+        }
+
+        let session = TerminalSession(connection: connection, node: node)
+        var output = Data()
+        session.onOutput = { output.append($0) }
+        await session.start()
+        if case .closed(let m) = session.state { return XCTFail("terminal closed: \(m ?? "")") }
+
+        // Nudge the shell and wait for output (a prompt or the echoed command).
+        try await Task.sleep(for: .milliseconds(600))
+        session.sendInput(ArraySlice(Data("echo meshremote_test\r\n".utf8)))
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline && output.count < 4 {
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertGreaterThan(output.count, 0, "No terminal output received")
+        print("LIVE: terminal output \(output.count) bytes: \(String(data: output.prefix(120), encoding: .utf8) ?? "<binary>")")
+        session.stop()
+    }
+
     func testLiveLoginAndDeviceList() async throws {
         guard let config = Config.fromEnvironment() else { throw XCTSkip("No live-server config in environment.") }
         let connection = try await connect(config)

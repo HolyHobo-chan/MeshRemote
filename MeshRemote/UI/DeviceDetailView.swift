@@ -46,6 +46,18 @@ struct DeviceDetailView: View {
                     .disabled(!node.hasAgent)
                 }
 
+                // Agent terminal — a shell run by the agent (works on Windows
+                // without SSH). Only for agent devices that advertise the capability.
+                if !isLocal && node.supportsTerminal {
+                    NavigationLink {
+                        AgentTerminalView(connection: connection, node: node)
+                    } label: {
+                        ActionRow(icon: "ActionTerminal", title: "Terminal",
+                                  subtitle: "Command shell via the agent")
+                    }
+                    .disabled(!node.hasAgent)
+                }
+
                 NavigationLink {
                     SSHView(connection: connection, node: node)
                 } label: {

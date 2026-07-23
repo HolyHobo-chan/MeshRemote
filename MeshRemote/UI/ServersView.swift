@@ -187,7 +187,9 @@ struct ServersView: View {
     private func startConnect(_ profile: ServerProfile) {
         switch profile.authMethod {
         case .password:
-            if let password = profile.password, !password.isEmpty {
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)   // "stay signed in" — skips password & 2FA
+            } else if let password = profile.password, !password.isEmpty {
                 connect(profile, password: password)
             } else {
                 passwordPrompt = profile
@@ -212,7 +214,9 @@ struct ServersView: View {
               let profile = app.profiles.first(where: \.autoConnect) else { return }
         switch profile.authMethod {
         case .password:
-            if let password = profile.password, !password.isEmpty {
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)
+            } else if let password = profile.password, !password.isEmpty {
                 connect(profile, password: password)
             }
         case .sso:
@@ -231,6 +235,12 @@ struct ServersView: View {
             defer { connectingProfile = nil }
             do {
                 try await connection.connect(password: password)
+                // "Stay signed in": mint a durable login token so neither the
+                // password nor a 2FA code is needed on future connects.
+                if profile.staySignedIn, profile.loginToken == nil,
+                   let token = await connection.createLoginToken() {
+                    profile.loginToken = token
+                }
                 app.connection = connection
             } catch MeshError.twoFactorRequired {
                 connectError = "This account requires a two-factor code. Edit the server and enter a current code before connecting."
@@ -277,9 +287,19 @@ struct ServersView: View {
                 try await connection.connect(tokenUser: token.user, tokenPass: token.pass)
                 app.connection = connection
             } catch {
-                // Token revoked or invalid — clear it and require a fresh sign-in.
+                // Token revoked or invalid — clear it and fall back to a fresh sign-in
+                // appropriate to the account type.
                 profile.loginToken = nil
-                ssoProfile = profile
+                switch profile.authMethod {
+                case .sso:
+                    ssoProfile = profile
+                case .password:
+                    if let password = profile.password, !password.isEmpty {
+                        connect(profile, password: password)
+                    } else {
+                        passwordPrompt = profile
+                    }
+                }
             }
         }
     }
@@ -299,6 +319,8 @@ struct ServerFormView: View {
     @State private var savePassword = true
     @State private var autoConnect = false
     @State private var authMethod: AuthMethod = .password
+    @State private var urlKey = ""
+    @State private var staySignedIn = false
     @State private var connecting = false
     @State private var connectError: String?
     @State private var pendingSSOProfile: ServerProfile?
@@ -309,13 +331,20 @@ struct ServerFormView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Server") {
+                Section {
                     TextField("Name (optional)", text: $displayName)
                     TextField("host.example.com[:port]", text: $host)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textContentType(.URL)
+                    TextField("Login key (optional)", text: $urlKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Server")
+                } footer: {
+                    Text("The login key is the ?key= value some servers require in the URL. Leave blank unless your server uses one.")
                 }
 
                 Section {
@@ -343,13 +372,19 @@ struct ServerFormView: View {
                     Section {
                         Toggle("Save password", isOn: $savePassword)
                             .onChange(of: savePassword) { _, saves in
-                                if !saves { autoConnect = false }
+                                if !saves && !staySignedIn { autoConnect = false }
                             }
                         Toggle("Connect automatically on launch", isOn: $autoConnect)
-                            .disabled(!savePassword)
+                            .disabled(!savePassword && !staySignedIn)
                         Toggle("Allow self-signed certificate", isOn: $allowSelfSigned)
                     } footer: {
-                        Text("Passwords are stored in the iOS Keychain. Automatic connection requires a saved password and applies to one server at a time. Enable the certificate option only for servers you trust — most self-hosted MeshCentral servers use a self-signed certificate.")
+                        Text("Passwords are stored in the iOS Keychain. Automatic connection requires a saved password or “Stay signed in,” and applies to one server at a time. Enable the certificate option only for servers you trust — most self-hosted MeshCentral servers use a self-signed certificate.")
+                    }
+
+                    Section {
+                        Toggle("Stay signed in on this device", isOn: $staySignedIn)
+                    } footer: {
+                        Text("Skips the password and two-factor code on future connections. After you sign in once, MeshRemote creates a login token on your MeshCentral account and uses it instead. You can revoke it anytime in the MeshCentral web interface under My Account → Security → Login Tokens.")
                     }
                 } else {
                     Section {
@@ -399,6 +434,8 @@ struct ServerFormView: View {
                     allowSelfSigned = existing.allowSelfSigned
                     autoConnect = existing.autoConnect
                     authMethod = existing.authMethod
+                    urlKey = existing.urlKey
+                    staySignedIn = existing.staySignedIn
                     let stored = existing.password
                     password = stored ?? ""
                     savePassword = stored != nil
@@ -415,7 +452,9 @@ struct ServerFormView: View {
         profile.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.allowSelfSigned = allowSelfSigned
         profile.authMethod = authMethod
-        profile.autoConnect = autoConnect && (authMethod == .sso || savePassword)
+        profile.urlKey = urlKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        profile.staySignedIn = staySignedIn
+        profile.autoConnect = autoConnect && (authMethod == .sso || savePassword || staySignedIn)
         return profile
     }
 
@@ -429,6 +468,15 @@ struct ServerFormView: View {
             do {
                 try await connection.connect(password: password,
                                              token: twoFactorCode.isEmpty ? nil : twoFactorCode)
+                // "Stay signed in": mint a durable login token now, while we hold a
+                // valid (2FA-satisfied) session, so future connects skip it entirely.
+                if staySignedIn {
+                    if profile.loginToken == nil, let token = await connection.createLoginToken() {
+                        profile.loginToken = token
+                    }
+                } else {
+                    profile.loginToken = nil   // opted out — stop using any stored token
+                }
                 onSave(profile, savePassword ? password : "")
                 app.connection = connection
                 dismiss()

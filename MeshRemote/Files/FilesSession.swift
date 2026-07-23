@@ -209,18 +209,17 @@ final class FilesSession {
         // default-domain servers ("node//hash"), so empty parts must be kept.
         let meshParts = node.meshId.split(separator: "/", omittingEmptySubsequences: false)
         let nodeParts = node.id.split(separator: "/", omittingEmptySubsequences: false)
+        // httpsURL adds the domain ?key= when the profile has one.
         guard meshParts.count == 3, nodeParts.count == 3,
-              let base = connection.profile.baseURL,
+              let base = connection.profile.httpsURL(path: "devicefile.ashx", query: [
+                URLQueryItem(name: "c", value: cookies.auth),
+                URLQueryItem(name: "m", value: String(meshParts[2])),
+                URLQueryItem(name: "n", value: String(nodeParts[2])),
+                URLQueryItem(name: "f", value: childPath(entry.name))
+              ]),
               var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw MeshError.badServerAddress
         }
-        comps.path = "/devicefile.ashx"
-        comps.queryItems = [
-            URLQueryItem(name: "c", value: cookies.auth),
-            URLQueryItem(name: "m", value: String(meshParts[2])),
-            URLQueryItem(name: "n", value: String(nodeParts[2])),
-            URLQueryItem(name: "f", value: childPath(entry.name))
-        ]
         // '+' survives URLComponents encoding but the server decodes it as a
         // space (form encoding); escape it so filenames with '+' work.
         comps.percentEncodedQuery = comps.percentEncodedQuery?

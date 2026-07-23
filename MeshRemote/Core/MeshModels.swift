@@ -40,6 +40,10 @@ struct MeshNode: Identifiable, Hashable {
     var isOnline: Bool { conn & 1 != 0 || conn & 8 != 0 }
     var hasAgent: Bool { conn & 1 != 0 }
 
+    /// The agent offers a shell terminal. Capability bit 2 = Terminal; a nil caps
+    /// value means a legacy/unknown agent, which we optimistically treat as capable.
+    var supportsTerminal: Bool { agentCaps == nil || (agentCaps! & 2) != 0 }
+
     init?(json: [String: Any], meshId: String) {
         guard let id = json["_id"] as? String else { return nil }
         self.id = id
@@ -147,6 +151,7 @@ struct UserInfo {
 /// Relay usage numbers (the p= query param). SSH uses a separate endpoint,
 /// so only the two agent-relay protocols this app opens are listed.
 enum RelayProtocol: Int {
+    case terminal = 1   // agent shell (cmd on Windows, bash on Unix)
     case desktop = 2
     case files = 5
 }

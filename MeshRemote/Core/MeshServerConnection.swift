@@ -451,16 +451,21 @@ final class MeshServerConnection {
     /// Opens a relay tunnel to a device. If the first attempt times out — the
     /// usual symptom of relay cookies that went stale while the app was
     /// suspended — it re-mints cookies once and retries before giving up.
-    func openTunnel(nodeId: String, relayProtocol: RelayProtocol) async throws -> MeshWebSocket {
+    /// `options`, when set, is sent as a JSON control frame right after the c/cr
+    /// handshake and before the protocol number — required by the agent terminal
+    /// (p=1) to carry initial size/shell settings. Desktop/files pass nil.
+    func openTunnel(nodeId: String, relayProtocol: RelayProtocol,
+                    options: [String: Any]? = nil) async throws -> MeshWebSocket {
         do {
-            return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol)
+            return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol, options: options)
         } catch MeshError.timeout {
             invalidateCookies()
-            return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol)
+            return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol, options: options)
         }
     }
 
-    private func openTunnelOnce(nodeId: String, relayProtocol: RelayProtocol) async throws -> MeshWebSocket {
+    private func openTunnelOnce(nodeId: String, relayProtocol: RelayProtocol,
+                                options: [String: Any]?) async throws -> MeshWebSocket {
         guard state == .connected else { throw MeshError.notConnected }
         let cookies = try await relayCookies()
         let tunnelId = Self.randomHex(12)
@@ -500,6 +505,12 @@ final class MeshServerConnection {
         } catch {
             relay.close()
             throw MeshError.timeout("the device to connect")
+        }
+        // Optional options control frame (terminal), then the protocol number.
+        if let options,
+           let data = try? JSONSerialization.data(withJSONObject: options),
+           let text = String(data: data, encoding: .utf8) {
+            try await relay.send(text: text)
         }
         try await relay.send(text: String(relayProtocol.rawValue))
         return relay

@@ -13,25 +13,25 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     var host: String = ""            // hostname[:port], no scheme
     var username: String = ""
     var allowSelfSigned: Bool = false
-    var urlKey: String = ""          // domain loginkey (?key=), rarely used
     var autoConnect: Bool = false    // connect to this server on app launch
     var authMethod: AuthMethod = .password
+    var staySignedIn: Bool = false   // mint & reuse a login token (skips password/2FA re-entry)
 
     init() {}
 
     init(displayName: String, host: String, username: String,
-         allowSelfSigned: Bool, urlKey: String = "", autoConnect: Bool = false,
+         allowSelfSigned: Bool, autoConnect: Bool = false,
          authMethod: AuthMethod = .password) {
         self.displayName = displayName
         self.host = host
         self.username = username
         self.allowSelfSigned = allowSelfSigned
-        self.urlKey = urlKey
         self.autoConnect = autoConnect
         self.authMethod = authMethod
     }
 
     // Tolerant decoding: profiles saved before a field existed still load.
+    // (urlKey is Keychain-backed, not a Codable field.)
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -39,9 +39,9 @@ struct ServerProfile: Identifiable, Codable, Hashable {
         host = try c.decodeIfPresent(String.self, forKey: .host) ?? ""
         username = try c.decodeIfPresent(String.self, forKey: .username) ?? ""
         allowSelfSigned = try c.decodeIfPresent(Bool.self, forKey: .allowSelfSigned) ?? false
-        urlKey = try c.decodeIfPresent(String.self, forKey: .urlKey) ?? ""
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
         authMethod = try c.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .password
+        staySignedIn = try c.decodeIfPresent(Bool.self, forKey: .staySignedIn) ?? false
     }
 
     var baseURL: URL? {
@@ -54,10 +54,25 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     }
 
     func websocketURL(path: String, query: [URLQueryItem] = []) -> URL? {
+        urlWith(scheme: "wss", path: path, query: query)
+    }
+
+    /// HTTPS URL for the given path (e.g. devicefile.ashx), with the domain key applied.
+    func httpsURL(path: String, query: [URLQueryItem] = []) -> URL? {
+        urlWith(scheme: "https", path: path, query: query)
+    }
+
+    /// The domain's web page, including the ?key= access key when the domain
+    /// requires one — used for the in-app SSO login.
+    var loginPageURL: URL? {
+        urlWith(scheme: "https", path: "", query: [])
+    }
+
+    private func urlWith(scheme: String, path: String, query: [URLQueryItem]) -> URL? {
         guard let base = baseURL,
               var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
-        comps.scheme = "wss"
-        comps.path = "/" + path
+        comps.scheme = scheme
+        if !path.isEmpty { comps.path = "/" + path }
         var items = query
         if !urlKey.isEmpty { items.append(URLQueryItem(name: "key", value: urlKey)) }
         comps.queryItems = items.isEmpty ? nil : items
@@ -68,12 +83,23 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     private var cookieAccount: String { "cookie-\(id.uuidString)" }
     private var tokenUserAccount: String { "tokuser-\(id.uuidString)" }
     private var tokenPassAccount: String { "tokpass-\(id.uuidString)" }
+    private var urlKeyAccount: String { "urlkey-\(id.uuidString)" }
 
     var password: String? {
         get { KeychainStore.password(account: keychainAccount) }
         nonmutating set {
             if let newValue { KeychainStore.setPassword(newValue, account: keychainAccount) }
             else { KeychainStore.deletePassword(account: keychainAccount) }
+        }
+    }
+
+    /// The domain access key (?key=) some servers require. It's a semi-secret URL
+    /// value, so it lives in the Keychain rather than plain profile storage.
+    var urlKey: String {
+        get { KeychainStore.password(account: urlKeyAccount) ?? "" }
+        nonmutating set {
+            if newValue.isEmpty { KeychainStore.deletePassword(account: urlKeyAccount) }
+            else { KeychainStore.setPassword(newValue, account: urlKeyAccount) }
         }
     }
 
@@ -130,6 +156,7 @@ final class ProfileStore {
         KeychainStore.deletePassword(account: profile.keychainAccount)
         profile.sessionCookie = nil
         profile.loginToken = nil   // clears both token Keychain items
+        profile.urlKey = ""        // clears the Keychain-stored login key
         var profiles = load()
         profiles.removeAll { $0.id == profile.id }
         save(profiles)
