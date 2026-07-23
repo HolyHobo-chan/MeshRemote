@@ -381,7 +381,7 @@ final class MeshServerConnection {
     /// can reconnect without signing in again. Returns nil if the server refuses
     /// (e.g. login tokens disabled) or times out — the caller then falls back to
     /// the session cookie. `expire: 0` means the token never expires.
-    func createLoginToken(name: String = "Mesh Remote (iOS)") async -> (user: String, pass: String)? {
+    func createLoginToken(name: String = "MeshRemote (iOS)") async -> (user: String, pass: String)? {
         guard state == .connected, tokenWaiter == nil else { return nil }
         return await withCheckedContinuation { cont in
             tokenWaiter = cont

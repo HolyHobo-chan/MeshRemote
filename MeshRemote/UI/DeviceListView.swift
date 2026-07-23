@@ -111,7 +111,7 @@ struct DeviceListView: View {
             Menu {
                 Toggle("Show Offline Devices", isOn: $showOfflineDevices)
                 Divider()
-                Button("About Mesh Remote", systemImage: "info.circle") {
+                Button("About MeshRemote", systemImage: "info.circle") {
                     showAbout = true
                 }
                 Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {

@@ -35,7 +35,7 @@ struct AboutView: View {
                                 .font(.system(size: 40))
                                 .foregroundStyle(Color.accentColor)
                         }
-                        Text("Mesh Remote")
+                        Text("MeshRemote")
                             .font(.title2.weight(.semibold))
                         Text("Version \(version)")
                             .font(.caption)
@@ -48,7 +48,7 @@ struct AboutView: View {
 
                 Section("What this app is for") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Mesh Remote is a companion app for your MeshCentral server. It was built for the essentials: check which devices are online, open a remote desktop or SSH session, move a file, or wake and restart a machine.")
+                        Text("MeshRemote is a companion app for your MeshCentral server. It was built for the essentials: check which devices are online, open a remote desktop or SSH session, move a file, or wake and restart a machine.")
                         Text("This is intentionally a very simple management app. For anything more advanced such as adding devices and device groups, user accounts and permissions, changing server settings, using Intel AMT, or scripting. You should just use the MeshCentral web interface in your browser.")
                     }
                     .font(.callout)
@@ -56,7 +56,7 @@ struct AboutView: View {
 
                 Section("Acknowledgements") {
                     DisclosureGroup("MeshCentral") {
-                        Text("Mesh Remote is an independent client for MeshCentral and is not affiliated with or endorsed by the MeshCentral project. MeshCentral is © Intel Corporation, created by Ylian Saint-Hilaire, and licensed under the Apache License 2.0 (apache.org/licenses/LICENSE-2.0). This app contains no MeshCentral code. It communicates with MeshCentral servers over their published interfaces.")
+                        Text("MeshRemote is an independent client for MeshCentral and is not affiliated with or endorsed by the MeshCentral project. MeshCentral is © Intel Corporation, created by Ylian Saint-Hilaire, and licensed under the Apache License 2.0 (apache.org/licenses/LICENSE-2.0). This app contains no MeshCentral code. It communicates with MeshCentral servers over their published interfaces.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -75,6 +75,16 @@ struct AboutView: View {
                             .foregroundStyle(.secondary)
                     }
                     .font(.callout)
+                }
+
+                Section {
+                    if let url = URL(string: "https://paypal.me/HolyHoboDev") {
+                        Link(destination: url) {
+                            Label("Buy me a soda", systemImage: "soda.cup")
+                        }
+                    }
+                } footer: {
+                    Text("MeshRemote is free. If it saved you a trip to the server, a soda is always appreciated.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -106,7 +116,7 @@ extension AboutView {
 
     /// Trademark notice for the platform logos used as device-type icons.
     static let trademarkNotice = """
-    Device-type icons depict third-party logos used only to identify the operating system of a device. Mesh Remote is not affiliated with, endorsed by, or sponsored by these companies.
+    Device-type icons depict third-party logos used only to identify the operating system of a device. MeshRemote is not affiliated with, endorsed by, or sponsored by these companies.
 
     Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries.
 

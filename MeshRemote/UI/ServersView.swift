@@ -11,6 +11,7 @@ struct ServersView: View {
     @State private var passwordPrompt: ServerProfile?
     @State private var promptedPassword = ""
     @State private var ssoProfile: ServerProfile?   // presenting the SSO web login (re-auth)
+    @State private var showAbout = false
 
     var body: some View {
         NavigationStack {
@@ -21,8 +22,15 @@ struct ServersView: View {
                     serverList
                 }
             }
-            .navigationTitle("Mesh Remote")
+            .navigationTitle("MeshRemote")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAbout = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAddSheet = true
@@ -30,6 +38,9 @@ struct ServersView: View {
                         Image(systemName: "plus")
                     }
                 }
+            }
+            .sheet(isPresented: $showAbout) {
+                AboutView()
             }
             .sheet(isPresented: $showAddSheet) {
                 ServerFormView { profile, password in

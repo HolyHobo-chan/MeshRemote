@@ -337,7 +337,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MeshRemote/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Remote";
+				INFOPLIST_KEY_CFBundleDisplayName = "MeshRemote";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MeshRemote connects to your MeshCentral server, which may be on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -370,7 +370,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MeshRemote/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Mesh Remote";
+				INFOPLIST_KEY_CFBundleDisplayName = "MeshRemote";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MeshRemote connects to your MeshCentral server, which may be on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
