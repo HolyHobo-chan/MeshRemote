@@ -7,7 +7,7 @@ servers that you or your organization operate. This policy explains how the app
 handles your information. In short: **MeshRemote does not collect, transmit, or
 sell any of your data.** There is no developer-operated backend — the app talks
 only to the MeshCentral server(s) you configure. Also, this is an unofficial
-project and is not affiliated with the MeshCentral Project. No source code from 
+project and is not affiliated with the MeshCentral project. No source code from 
 MeshCentral is contained within this project.
 
 
