@@ -55,6 +55,12 @@ struct DeviceListView: View {
     private var deviceList: some View {
         let nodes = filteredNodes
         let grouped = Dictionary(grouping: nodes, by: \.meshId)
+        let knownMeshIds = Set(connection.meshes.map(\.id))
+        // Devices shared directly with the user (not via a device-group membership)
+        // arrive under a mesh the user has no group rights to, so that mesh never
+        // appears in `connection.meshes`. Collect them into their own section so
+        // they aren't dropped from the list even though the summary counts them.
+        let ungroupedNodes = nodes.filter { !knownMeshIds.contains($0.meshId) }
 
         return List {
             summaryHeader
@@ -62,15 +68,14 @@ struct DeviceListView: View {
             ForEach(connection.meshes) { mesh in
                 if let meshNodes = grouped[mesh.id], !meshNodes.isEmpty {
                     Section(mesh.name) {
-                        ForEach(meshNodes.sorted {
-                            if $0.isOnline != $1.isOnline { return $0.isOnline }
-                            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                        }) { node in
-                            NavigationLink(value: node) {
-                                DeviceRow(node: node, isLocal: connection.isLocalDevice(node))
-                            }
-                        }
+                        deviceRows(meshNodes)
                     }
+                }
+            }
+
+            if !ungroupedNodes.isEmpty {
+                Section("Other Devices") {
+                    deviceRows(ungroupedNodes)
                 }
             }
         }
@@ -78,6 +83,18 @@ struct DeviceListView: View {
         .overlay {
             if nodes.isEmpty {
                 ContentUnavailableView.search(text: searchText)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deviceRows(_ nodes: [MeshNode]) -> some View {
+        ForEach(nodes.sorted {
+            if $0.isOnline != $1.isOnline { return $0.isOnline }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }) { node in
+            NavigationLink(value: node) {
+                DeviceRow(node: node, isLocal: connection.isLocalDevice(node))
             }
         }
     }
