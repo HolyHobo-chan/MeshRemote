@@ -74,6 +74,12 @@ The MeshCentral wire formats this app implements are documented in [docs/](docs/
   enforced per-server unless you enable the override.
 
 
+## Privacy
+
+MeshRemote collects no data and has no backend — it talks only to the MeshCentral
+server(s) you configure, and credentials stay in the iOS Keychain on your device.
+See [PRIVACY.md](PRIVACY.md) for the full policy.
+
 ## AI Disclosure
  
 A majority of the code in this project was written using Claude AI with a human review. 
