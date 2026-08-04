@@ -1,0 +1,6 @@
+{
+  "images" : [
+    { "filename" : "OnboardDevices.png", "idiom" : "universal" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}

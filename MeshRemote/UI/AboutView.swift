@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var showGuide = false
 
     private var version: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
@@ -54,6 +55,16 @@ struct AboutView: View {
                     .font(.callout)
                 }
 
+                Section {
+                    Button {
+                        showGuide = true
+                    } label: {
+                        Label("Setup Guide", systemImage: "book")
+                    }
+                } footer: {
+                    Text("A short walkthrough of adding a server and signing in.")
+                }
+
                 Section("Acknowledgements") {
                     DisclosureGroup("MeshCentral") {
                         Text("MeshRemote is an independent client for MeshCentral and is not affiliated with or endorsed by the MeshCentral project. MeshCentral is © Intel Corporation, created by Ylian Saint-Hilaire, and licensed under the Apache License 2.0 (apache.org/licenses/LICENSE-2.0). This app contains no MeshCentral code. It communicates with MeshCentral servers over their published interfaces.")
@@ -88,6 +99,9 @@ struct AboutView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .fullScreenCover(isPresented: $showGuide) {
+                OnboardingView { }
+            }
             .navigationTitle("About")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

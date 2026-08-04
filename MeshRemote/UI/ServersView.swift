@@ -12,6 +12,10 @@ struct ServersView: View {
     @State private var promptedPassword = ""
     @State private var ssoProfile: ServerProfile?   // presenting the SSO web login (re-auth)
     @State private var showAbout = false
+    @State private var showOnboarding = false
+    /// First-run walkthrough shows once. Existing users (who already have a
+    /// profile saved) never see it.
+    @AppStorage("meshremote.hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
         NavigationStack {
@@ -42,6 +46,9 @@ struct ServersView: View {
             .sheet(isPresented: $showAbout) {
                 AboutView()
             }
+            .fullScreenCover(isPresented: $showOnboarding) {
+                OnboardingView { hasSeenOnboarding = true }
+            }
             .sheet(isPresented: $showAddSheet) {
                 ServerFormView { profile, password in
                     app.profiles.append(profile)
@@ -70,7 +77,10 @@ struct ServersView: View {
                     connectSSO(profile, cookie: cookie)
                 }
             }
-            .task { autoConnectIfWanted() }
+            .task {
+                if !hasSeenOnboarding && app.profiles.isEmpty { showOnboarding = true }
+                autoConnectIfWanted()
+            }
             .alert("Connection Failed", isPresented: Binding(
                 get: { connectError != nil },
                 set: { if !$0 { connectError = nil } }
@@ -113,8 +123,20 @@ struct ServersView: View {
         } description: {
             Text("Add your MeshCentral server to get started.")
         } actions: {
-            Button("Add Server") { showAddSheet = true }
-                .buttonStyle(.borderedProminent)
+            Button {
+                showAddSheet = true
+            } label: {
+                Text("Add Server")
+                    .font(.headline)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            Button("View Setup Guide") { showOnboarding = true }
+                .font(.subheadline)
+                .padding(.top, 2)
         }
     }
 
@@ -246,10 +268,13 @@ struct ServersView: View {
                 connectError = "This account requires a two-factor code. Edit the server and enter a current code before connecting."
                 editingProfile = profile
             } catch {
+                // The server's own rejection message (bad password, account
+                // locked) beats anything we can infer; fall back to advice
+                // when the failure happened before the server ever answered.
                 if case .failed(let message) = connection.state {
                     connectError = message
                 } else {
-                    connectError = error.localizedDescription
+                    connectError = ConnectionAdvice.message(for: error, profile: profile)
                 }
             }
         }
@@ -324,6 +349,7 @@ struct ServerFormView: View {
     @State private var connecting = false
     @State private var connectError: String?
     @State private var pendingSSOProfile: ServerProfile?
+    @FocusState private var hostFieldFocused: Bool
 
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -338,13 +364,17 @@ struct ServerFormView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textContentType(.URL)
+                        .focused($hostFieldFocused)
+                        .onChange(of: hostFieldFocused) { _, focused in
+                            if !focused { normalizeHostField() }
+                        }
                     TextField("Login key (optional)", text: $urlKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
                     Text("Server")
                 } footer: {
-                    Text("The login key is the ?key= value some servers require in the URL. Leave blank unless your server uses one.")
+                    Text("You can paste a full server URL — MeshRemote keeps the address and pulls out the login key. The login key is the ?key= value some servers require in the URL; leave it blank unless your server uses one.")
                 }
 
                 Section {
@@ -445,7 +475,20 @@ struct ServerFormView: View {
     }
 
     /// Builds a profile from the current form fields (without touching the Keychain).
+    /// Rewrites a pasted URL into a bare host, moving any ?key= it carried into
+    /// the login key field. Runs when the field loses focus rather than on each
+    /// keystroke, so it never fights someone typing an address by hand.
+    private func normalizeHostField() {
+        guard let parsed = ServerAddress.parse(host) else { return }
+        if host != parsed.host { host = parsed.host }
+        // Don't clobber a key the user entered themselves.
+        if let key = parsed.key, urlKey.trimmingCharacters(in: .whitespaces).isEmpty {
+            urlKey = key
+        }
+    }
+
     private func buildProfile() -> ServerProfile {
+        normalizeHostField()
         var profile = existing ?? ServerProfile()
         profile.displayName = displayName
         profile.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -484,7 +527,7 @@ struct ServerFormView: View {
                 if case .failed(let message) = connection.state {
                     connectError = message
                 } else {
-                    connectError = error.localizedDescription
+                    connectError = ConnectionAdvice.message(for: error, profile: profile)
                 }
             }
         }

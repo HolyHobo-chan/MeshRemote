@@ -334,10 +334,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 2LVXBNX3AJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MeshRemote/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "MeshRemote";
+				INFOPLIST_KEY_CFBundleDisplayName = MeshRemote;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MeshRemote connects to your MeshCentral server, which may be on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -367,10 +367,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 2LVXBNX3AJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MeshRemote/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "MeshRemote";
+				INFOPLIST_KEY_CFBundleDisplayName = MeshRemote;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MeshRemote connects to your MeshCentral server, which may be on your local network.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
