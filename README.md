@@ -3,7 +3,7 @@
 <a href="https://apps.apple.com/us/app/meshremote/id6794005665">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/app-store-badge-white.svg">
-    <img src="docs/app-store-badge-black.svg" alt="Download on the App Store" height="48">
+    <img src="docs/app-store-badge-black.svg" alt="Download on the App Store" height="96">
   </picture>
 </a>
 
