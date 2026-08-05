@@ -1,5 +1,12 @@
 # MeshRemote
 
+<a href="https://apps.apple.com/us/app/meshremote/id6794005665">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/app-store-badge-white.svg">
+    <img src="docs/app-store-badge-black.svg" alt="Download on the App Store" height="48">
+  </picture>
+</a>
+
 A native iOS management app for [MeshCentral](https://meshcentral.com). Browse your
 devices, control them with remote desktop, open SSH terminals, transfer files, and
 send power commands.
@@ -28,9 +35,10 @@ terminal uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm).
   domain section of the server's `config.json`.
 
 ## Installation
-- There is a release IPA you can download from the [here](https://github.com/HolyHobo-chan/MeshRemote/releases). For now you should use
-a tool like altstore or sidestore to install. I may release this on the appstore if
-there is enough demand, but for now it's best to sideload.
+
+- **From the App Store** — [MeshRemote on the App Store](https://apps.apple.com/us/app/meshremote/id6794005665).
+  This is the easiest way to install and keeps the app updated automatically.
+- **Build it yourself** — see Build Requirements above.
 
 ## First launch: 
 
