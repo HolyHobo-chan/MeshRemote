@@ -7,6 +7,12 @@ struct DeviceListView: View {
     @State private var searchText = ""
     @State private var showOfflineDevices = true
     @State private var showAbout = false
+    @State private var prefs: DeviceListPreferences
+
+    init(connection: MeshServerConnection) {
+        self.connection = connection
+        _prefs = State(initialValue: DeviceListPreferences(profileId: connection.profile.id))
+    }
 
     var body: some View {
         NavigationStack {
@@ -54,29 +60,40 @@ struct DeviceListView: View {
 
     private var deviceList: some View {
         let nodes = filteredNodes
-        let grouped = Dictionary(grouping: nodes, by: \.meshId)
+        let searching = !searchText.isEmpty
+
+        // Favourites are hoisted into their own pinned section and removed from
+        // their group, so a device never appears twice in the list.
+        let favorites = nodes.filter { prefs.isFavorite($0.id) }
+        let favoriteIds = Set(favorites.map(\.id))
+        let rest = nodes.filter { !favoriteIds.contains($0.id) }
+
+        let grouped = Dictionary(grouping: rest, by: \.meshId)
         let knownMeshIds = Set(connection.meshes.map(\.id))
         // Devices shared directly with the user (not via a device-group membership)
         // arrive under a mesh the user has no group rights to, so that mesh never
         // appears in `connection.meshes`. Collect them into their own section so
         // they aren't dropped from the list even though the summary counts them.
-        let ungroupedNodes = nodes.filter { !knownMeshIds.contains($0.meshId) }
+        let ungroupedNodes = rest.filter { !knownMeshIds.contains($0.meshId) }
 
         return List {
             summaryHeader
 
+            if !favorites.isEmpty {
+                groupSection(id: "favorites", title: "Favorites",
+                             icon: "star.fill", nodes: favorites, searching: searching)
+            }
+
             ForEach(connection.meshes) { mesh in
                 if let meshNodes = grouped[mesh.id], !meshNodes.isEmpty {
-                    Section(mesh.name) {
-                        deviceRows(meshNodes)
-                    }
+                    groupSection(id: mesh.id, title: mesh.name,
+                                 nodes: meshNodes, searching: searching)
                 }
             }
 
             if !ungroupedNodes.isEmpty {
-                Section("Other Devices") {
-                    deviceRows(ungroupedNodes)
-                }
+                groupSection(id: "other", title: "Other Devices",
+                             nodes: ungroupedNodes, searching: searching)
             }
         }
         .listStyle(.insetGrouped)
@@ -84,6 +101,38 @@ struct DeviceListView: View {
             if nodes.isEmpty {
                 ContentUnavailableView.search(text: searchText)
             }
+        }
+    }
+
+    /// A section whose header collapses the group. Collapsing is ignored while
+    /// searching — a match must never stay hidden behind a collapsed header.
+    @ViewBuilder
+    private func groupSection(id: String, title: String, icon: String? = nil,
+                              nodes: [MeshNode], searching: Bool) -> some View {
+        let collapsed = !searching && prefs.isCollapsed(id)
+        Section {
+            if !collapsed { deviceRows(nodes) }
+        } header: {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { prefs.toggleCollapsed(id) }
+            } label: {
+                HStack(spacing: 6) {
+                    if let icon {
+                        Image(systemName: icon)
+                            .foregroundStyle(.yellow)
+                    }
+                    Text(title)
+                    Text("\(nodes.count)")
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(searching)
         }
     }
 
@@ -96,7 +145,24 @@ struct DeviceListView: View {
             NavigationLink(value: node) {
                 DeviceRow(node: node, isLocal: connection.isLocalDevice(node))
             }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                favoriteButton(node)
+            }
+            .contextMenu {
+                favoriteButton(node)
+            }
         }
+    }
+
+    private func favoriteButton(_ node: MeshNode) -> some View {
+        let isFavorite = prefs.isFavorite(node.id)
+        return Button {
+            withAnimation { prefs.toggleFavorite(node.id) }
+        } label: {
+            Label(isFavorite ? "Remove Favorite" : "Add to Favorites",
+                  systemImage: isFavorite ? "star.slash" : "star")
+        }
+        .tint(.yellow)
     }
 
     private var summaryHeader: some View {
@@ -127,6 +193,11 @@ struct DeviceListView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Toggle("Show Offline Devices", isOn: $showOfflineDevices)
+                if !prefs.collapsedGroups.isEmpty {
+                    Button("Expand All Groups", systemImage: "chevron.down") {
+                        withAnimation { prefs.expandAll() }
+                    }
+                }
                 Divider()
                 Button("About MeshRemote", systemImage: "info.circle") {
                     showAbout = true
