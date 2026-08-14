@@ -4,6 +4,9 @@ import Observation
 enum ConnectionState: Equatable {
     case disconnected
     case connecting
+    /// The socket died (usually because iOS suspended the app) and we're
+    /// re-establishing it. The device list stays on screen while this happens.
+    case reconnecting
     case connected
     case failed(String)
 }
@@ -56,6 +59,11 @@ final class MeshServerConnection {
 
     // Awaits a createLoginToken response.
     private var tokenWaiter: CheckedContinuation<(user: String, pass: String)?, Never>?
+
+    // The headers that produced the current session, replayed to reconnect
+    // after iOS tears the socket down. Memory only — never persisted.
+    private var authHeaders: [String: String]?
+    private var reconnectTask: Task<Void, Never>?
 
     init(profile: ServerProfile) {
         self.profile = profile
@@ -119,6 +127,10 @@ final class MeshServerConnection {
         }
         state = .connecting
         lastError = nil
+        // Tear down anything left from a previous session first. Without this a
+        // reconnect would leave the old receive loop running against the dead
+        // socket, and its eventual failure would kill the new connection.
+        cleanup()
 
         let socket = MeshWebSocket(url: url,
                                    headers: authHeaders,
@@ -131,11 +143,11 @@ final class MeshServerConnection {
             try await waitForLogin(socket: socket)
         } catch {
             self.socket = nil
-            let message = friendlyMessage(for: error)
-            state = .failed(message)
+            state = .failed(ConnectionAdvice.message(for: error, profile: profile))
             throw error
         }
 
+        self.authHeaders = authHeaders   // kept so we can silently reconnect later
         state = .connected
         startReceiveLoop(socket: socket)
         startCookieRefresh()
@@ -146,19 +158,63 @@ final class MeshServerConnection {
         try? await sendJSON(["action": "authcookie"])
     }
 
-    /// Called when the app returns to the foreground. iOS may have torn down the
-    /// socket while suspended (leaving it half-open) and the relay cookies may be
-    /// past the server's ~60-minute lifetime. Re-mint cookies and probe the
-    /// control channel; if the probe fails, surface the dead connection instead
-    /// of showing stale "online" devices forever.
+    /// Called when the app returns to the foreground. iOS severs the control
+    /// socket whenever it suspends the app — a few seconds in another app is
+    /// enough — so returning here usually means either stale relay cookies (the
+    /// server's are good for ~60 minutes) or a dead socket that needs redialing.
     func refreshAfterForeground() async {
-        guard state == .connected else { return }
-        invalidateCookies()
-        do {
-            try await sendJSON(["action": "authcookie"])
-            try await sendJSON(["action": "nodes"])
-        } catch {
-            markConnectionLost()
+        switch state {
+        case .connected:
+            invalidateCookies()
+            do {
+                try await sendJSON(["action": "authcookie"])
+                try await sendJSON(["action": "nodes"])
+            } catch {
+                markConnectionLost()
+            }
+        case .reconnecting:
+            // Died while we were suspended (background tasks don't run then), so
+            // this foreground pass is the first chance to redial.
+            await reconnect()
+        case .connecting, .disconnected, .failed:
+            // .failed is terminal on purpose: it's where a rejected login lands,
+            // and replaying the same credentials on every app switch would earn
+            // an IP ban from MeshCentral rather than a session. The banner's
+            // Retry button is the way back from here.
+            break
+        }
+    }
+
+    /// Re-establishes the control channel by replaying the headers that worked
+    /// the first time. Leaves the UI in place: a quick app switch shouldn't dump
+    /// the user back to the server list.
+    func reconnect() async {
+        guard let authHeaders else { return }
+        // A queued retry can land after the connection already came back (the
+        // foreground pass usually wins the race). Re-dialing here would tear
+        // down a perfectly healthy session.
+        guard state != .connected, state != .connecting else { return }
+        // connect() records its own outcome in `state`, including the failure
+        // message, so there's nothing to add here.
+        try? await connect(authHeaders: authHeaders)
+    }
+
+    /// Retries a socket that dropped while the app was on screen (flaky Wi-Fi,
+    /// server restart). Backs off exponentially, with jitter so a fleet of
+    /// clients doesn't redial a restarting server in lockstep.
+    private func scheduleReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            for attempt in 0..<3 {
+                if attempt > 0 {
+                    let delay = pow(2.0, Double(attempt)) + Double.random(in: 0...1)
+                    // A cancelled sleep throws, which is the signal to stop.
+                    if (try? await Task.sleep(for: .seconds(delay))) == nil { return }
+                }
+                guard let self else { return }
+                await self.reconnect()
+                if self.state == .connected { return }
+            }
         }
     }
 
@@ -205,25 +261,10 @@ final class MeshServerConnection {
         }
     }
 
-    private func friendlyMessage(for error: Error) -> String {
-        if let meshError = error as? MeshError { return meshError.localizedDescription }
-        let ns = error as NSError
-        if ns.domain == NSURLErrorDomain {
-            switch ns.code {
-            case NSURLErrorServerCertificateUntrusted, NSURLErrorSecureConnectionFailed,
-                 NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot:
-                return "The server's certificate isn't trusted. Enable “Allow self-signed certificate” if this server uses one."
-            case NSURLErrorCannotFindHost: return "Server not found — check the address."
-            case NSURLErrorCannotConnectToHost: return "Could not reach the server."
-            case NSURLErrorTimedOut: return "Connection timed out."
-            case NSURLErrorNotConnectedToInternet: return "No network connection."
-            default: break
-            }
-        }
-        return error.localizedDescription
-    }
-
     func disconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        authHeaders = nil      // an explicit sign-out must not silently reconnect
         cleanup()
         state = .disconnected
     }
@@ -252,7 +293,10 @@ final class MeshServerConnection {
     private func markConnectionLost() {
         guard state == .connected else { return }
         cleanup()
-        state = .failed("Connection to the server was lost.")
+        // connect() stores the credentials before it reports .connected, so
+        // reaching here always means we have what we need to redial.
+        state = .reconnecting
+        scheduleReconnect()
     }
 
     // MARK: - Receive loop

@@ -60,6 +60,8 @@ struct AgentTerminalView: View {
     let node: MeshNode
 
     @State private var session: TerminalSession?
+    /// Bumped to ask the task below for a fresh session after a disconnect.
+    @State private var attempt = 0
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -74,7 +76,9 @@ struct AgentTerminalView: View {
                 case .connecting:
                     ConnectingOverlay(label: "Opening terminal on \(node.name)…")
                 case .closed(let message):
-                    SessionEndedOverlay(message: message) { dismiss() }
+                    SessionEndedOverlay(message: message,
+                                        onReconnect: { restart() },
+                                        onDismiss: { dismiss() })
                 case .connected:
                     if let banner = session.consoleMessage {
                         VStack {
@@ -92,12 +96,20 @@ struct AgentTerminalView: View {
         .navigationTitle("Terminal — \(node.name)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
-        .task {
+        .task(id: attempt) {
             guard session == nil else { return }
             let newSession = TerminalSession(connection: connection, node: node)
             session = newSession
             await newSession.start()
         }
         .onDisappear { session?.stop() }
+    }
+
+    /// A terminal can't be resumed — the remote shell is gone — so reconnecting
+    /// means opening a fresh one on the same device.
+    private func restart() {
+        session?.stop()
+        session = nil
+        attempt += 1
     }
 }

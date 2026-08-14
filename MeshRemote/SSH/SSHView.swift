@@ -64,6 +64,8 @@ struct SSHView: View {
     let node: MeshNode
 
     @State private var session: SSHSession?
+    /// Bumped to ask the task below for a fresh session after a disconnect.
+    @State private var attempt = 0
     @State private var username = ""
     @State private var password = ""
     @State private var keyPassphrase = ""
@@ -90,7 +92,13 @@ struct SSHView: View {
                     ConnectingOverlay(label: session.state == .connecting
                                       ? "Connecting to \(node.name)…" : "Signing in…")
                 case .closed(let message):
-                    SessionEndedOverlay(message: message) { dismiss() }
+                    SessionEndedOverlay(message: message,
+                                        onReconnect: {
+                                            session.stop()          // the shadowed parameter
+                                            self.session = nil      // the @State the task watches
+                                            self.attempt += 1
+                                        },
+                                        onDismiss: { dismiss() })
                 case .needsCredentials, .connected:
                     EmptyView()
                 }
@@ -99,7 +107,7 @@ struct SSHView: View {
         .navigationTitle("SSH — \(node.name)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
-        .task {
+        .task(id: attempt) {
             guard session == nil else { return }
             let newSession = SSHSession(connection: connection, node: node)
             session = newSession

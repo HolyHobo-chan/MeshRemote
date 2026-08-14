@@ -44,21 +44,35 @@ struct RootView: View {
     @Environment(AppState.self) private var app
 
     @Environment(\.scenePhase) private var scenePhase
+    @State private var backgroundGrace = BackgroundGrace()
 
     var body: some View {
         Group {
-            if let connection = app.connection, connection.state == .connected {
+            // Stay on the device list for the whole life of a connection, not
+            // just while it's healthy. A dropped socket is shown as a banner
+            // over the list; unmounting here would throw away the navigation
+            // stack every time iOS suspends the app for a few seconds.
+            if let connection = app.connection {
                 DeviceListView(connection: connection)
             } else {
                 ServersView()
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            // iOS may have severed the control socket while suspended. On return,
-            // re-mint relay cookies and probe the connection so we don't show
-            // stale "online" devices or hand expired cookies to new sessions.
-            if phase == .active {
+            switch phase {
+            case .background:
+                // Hold the app awake for the grace period iOS allows, so a quick
+                // switch to a password manager or authenticator leaves the control
+                // socket and any open tunnels connected.
+                if app.connection != nil { backgroundGrace.begin() }
+            case .active:
+                backgroundGrace.end()
+                // If the grace window ran out, iOS suspended us and severed the
+                // socket. Re-mint relay cookies, or redial, so we never show stale
+                // "online" devices or hand expired cookies to a new session.
                 Task { await app.connection?.refreshAfterForeground() }
+            default:
+                break
             }
         }
     }

@@ -208,6 +208,8 @@ struct DesktopView: View {
     let node: MeshNode
 
     @State private var session: DesktopSession?
+    /// Bumped to ask the task below for a fresh session after a disconnect.
+    @State private var attempt = 0
     @State private var bridge = DesktopViewBridge()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -224,7 +226,13 @@ struct DesktopView: View {
                 case .connecting:
                     ConnectingOverlay(label: "Connecting to \(node.name)…")
                 case .closed(let message):
-                    SessionEndedOverlay(message: message) { dismiss() }
+                    SessionEndedOverlay(message: message,
+                                        onReconnect: {
+                                            session.stop()          // the shadowed parameter
+                                            self.session = nil      // the @State the task watches
+                                            self.attempt += 1
+                                        },
+                                        onDismiss: { dismiss() })
                 case .connected:
                     EmptyView()
                 }
@@ -239,7 +247,7 @@ struct DesktopView: View {
                 SpecialKeysBar(bridge: bridge)
             }
         }
-        .task {
+        .task(id: attempt) {
             guard session == nil else { return }
             let newSession = DesktopSession(connection: connection, node: node)
             session = newSession
@@ -405,8 +413,13 @@ struct ConnectingOverlay: View {
     }
 }
 
+/// Shown when a tunnel session ends. iOS kills these sockets whenever it
+/// suspends the app for more than the background grace window, so "ended"
+/// is usually just "you were away too long" — offer the way back rather than
+/// making dismissal the only option.
 struct SessionEndedOverlay: View {
     let message: String?
+    var onReconnect: (() -> Void)? = nil
     let onDismiss: () -> Void
 
     var body: some View {
@@ -418,8 +431,15 @@ struct SessionEndedOverlay: View {
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.primary)
-            Button("Close", action: onDismiss)
-                .buttonStyle(.borderedProminent)
+            if let onReconnect {
+                Button("Reconnect", action: onReconnect)
+                    .buttonStyle(.borderedProminent)
+                Button("Close", action: onDismiss)
+                    .font(.subheadline)
+            } else {
+                Button("Close", action: onDismiss)
+                    .buttonStyle(.borderedProminent)
+            }
         }
         .padding(28)
         .frame(maxWidth: 320)

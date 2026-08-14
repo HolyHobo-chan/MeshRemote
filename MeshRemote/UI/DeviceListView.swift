@@ -31,10 +31,15 @@ struct DeviceListView: View {
                 DeviceDetailView(connection: connection, nodeId: node.id)
             }
             .overlay(alignment: .bottom) {
-                if case .failed(let message) = connection.state {
-                    DisconnectedBanner(message: message) {
-                        app.signOut()
-                    }
+                switch connection.state {
+                case .reconnecting, .connecting:
+                    ReconnectingBanner()
+                case .failed(let message):
+                    DisconnectedBanner(message: message,
+                                       onRetry: { Task { await connection.reconnect() } },
+                                       onSignOut: { app.signOut() })
+                default:
+                    EmptyView()
                 }
             }
             .sheet(isPresented: $showAbout) {
@@ -284,8 +289,38 @@ struct DeviceRow: View {
     }
 }
 
+/// Shared chrome for the banners that sit at the bottom of the device list, so
+/// the two can't drift apart in corner radius, inset or transition.
+private extension View {
+    func bottomBanner() -> some View {
+        self
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// Shown while the control socket is being re-established after the app
+/// returns from the background. Non-blocking on purpose — the device list
+/// stays usable and the session resumes underneath it.
+struct ReconnectingBanner: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Reconnecting…")
+                .font(.footnote)
+            Spacer()
+        }
+        .bottomBanner()
+    }
+}
+
 struct DisconnectedBanner: View {
     let message: String
+    let onRetry: () -> Void
     let onSignOut: () -> Void
 
     var body: some View {
@@ -295,12 +330,11 @@ struct DisconnectedBanner: View {
                 .font(.footnote)
                 .lineLimit(2)
             Spacer()
+            Button("Retry", action: onRetry)
+                .font(.footnote.weight(.semibold))
             Button("Sign Out", action: onSignOut)
                 .font(.footnote.weight(.semibold))
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal)
-        .padding(.bottom, 8)
+        .bottomBanner()
     }
 }

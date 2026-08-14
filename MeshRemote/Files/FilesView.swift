@@ -6,6 +6,8 @@ struct FilesView: View {
     let node: MeshNode
 
     @State private var session: FilesSession?
+    /// Bumped to ask the task below for a fresh session after a disconnect.
+    @State private var attempt = 0
     @State private var showNewFolderPrompt = false
     @State private var newFolderName = ""
     @State private var renameTarget: FileEntry?
@@ -27,7 +29,7 @@ struct FilesView: View {
         .navigationTitle(session?.displayPath ?? node.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
-        .task {
+        .task(id: attempt) {
             guard session == nil else { return }
             let newSession = FilesSession(connection: connection, node: node)
             session = newSession
@@ -87,7 +89,13 @@ struct FilesView: View {
             case .connecting:
                 ProgressView("Connecting to \(node.name)…")
             case .closed(let message):
-                SessionEndedOverlay(message: message) { dismiss() }
+                SessionEndedOverlay(message: message,
+                                    onReconnect: {
+                                        session.stop()          // the shadowed parameter
+                                        self.session = nil      // the @State the task watches
+                                        self.attempt += 1
+                                    },
+                                    onDismiss: { dismiss() })
             case .ready:
                 listView(session)
             }
