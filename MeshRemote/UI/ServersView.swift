@@ -201,6 +201,8 @@ struct ServersView: View {
             return "\(profile.username) · \(profile.host)"
         case .sso:
             return "SSO · \(profile.host)"
+        case .token:
+            return "Login token · \(profile.host)"
         }
     }
 
@@ -224,6 +226,12 @@ struct ServersView: View {
             } else {
                 ssoProfile = profile   // never signed in / no stored session
             }
+        case .token:
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)
+            } else {
+                editingProfile = profile   // no token stored yet — go paste one
+            }
         }
     }
 
@@ -246,6 +254,10 @@ struct ServersView: View {
                 connectToken(profile, token: token)
             } else if let cookie = profile.sessionCookie, !cookie.isEmpty {
                 connectSSO(profile, cookie: cookie)
+            }
+        case .token:
+            if let token = profile.loginToken {
+                connectToken(profile, token: token)
             }
         }
     }
@@ -324,6 +336,11 @@ struct ServersView: View {
                     } else {
                         passwordPrompt = profile
                     }
+                case .token:
+                    // A hand-entered token is the only credential here, so there's
+                    // nothing to fall back to — send them to paste a fresh one.
+                    connectError = "This login token is no longer valid. Create a new one in MeshCentral and enter it here."
+                    editingProfile = profile
                 }
             }
         }
@@ -349,6 +366,8 @@ struct ServerFormView: View {
     @State private var connecting = false
     @State private var connectError: String?
     @State private var pendingSSOProfile: ServerProfile?
+    @State private var tokenUser = ""
+    @State private var tokenPass = ""
     @FocusState private var hostFieldFocused: Bool
 
     @Environment(AppState.self) private var app
@@ -381,11 +400,17 @@ struct ServerFormView: View {
                     Picker("Sign-in method", selection: $authMethod) {
                         Text("Password").tag(AuthMethod.password)
                         Text("Single Sign-On").tag(AuthMethod.sso)
+                        Text("Login Token").tag(AuthMethod.token)
                     }
                 } footer: {
-                    Text(authMethod == .sso
-                         ? "Use this if your MeshCentral account signs in through an external provider (Microsoft, Google, OIDC, SAML, etc.). You'll sign in through your server's web page."
-                         : "Use this for a local MeshCentral account with a username and password.")
+                    switch authMethod {
+                    case .password:
+                        Text("Use this for a local MeshCentral account with a username and password.")
+                    case .sso:
+                        Text("Use this if your MeshCentral account signs in through an external provider (Microsoft, Google, OIDC, SAML, etc.). You'll sign in through your server's web page.")
+                    case .token:
+                        Text("Use this when your provider can't sign in inside the app. Most often a passkey-only provider. You'll need to create a token in MeshCentral's web interface and paste it here.")
+                    }
                 }
 
                 if authMethod == .password {
@@ -417,11 +442,27 @@ struct ServerFormView: View {
                         Text("Skips the password and two-factor code on future connections. After you sign in once, MeshRemote creates a login token on your MeshCentral account and uses it instead. You can revoke it anytime in the MeshCentral web interface under My Account → Security → Login Tokens.")
                     }
                 } else {
+                    if authMethod == .token {
+                        Section {
+                            TextField("Token username (~t:…)", text: $tokenUser)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            SecureField("Token password", text: $tokenPass)
+                                .textInputAutocapitalization(.never)
+                        } header: {
+                            Text("Token")
+                        } footer: {
+                            Text("Sign in to your MeshCentral server in a web browser, then go to My Account → Security → Login Tokens and add one. It gives you a username and a password — enter both here. The password is only shown once.")
+                        }
+                    }
+
                     Section {
                         Toggle("Connect automatically on launch", isOn: $autoConnect)
                         Toggle("Allow self-signed certificate", isOn: $allowSelfSigned)
                     } footer: {
-                        Text("Your session is stored securely in the iOS Keychain after you sign in. If it expires, you'll be asked to sign in again.")
+                        Text(authMethod == .token
+                             ? "The token is stored in the iOS Keychain and doesn't expire unless you set an expiry. Revoke it anytime from the same page in MeshCentral."
+                             : "Your session is stored securely in the iOS Keychain after you sign in. If it expires, you'll be asked to sign in again.")
                     }
                 }
 
@@ -445,6 +486,9 @@ struct ServerFormView: View {
                     } else if authMethod == .sso {
                         Button("Sign In") { pendingSSOProfile = buildProfile() }
                             .disabled(host.isEmpty)
+                    } else if authMethod == .token {
+                        Button("Connect") { connectAndSaveToken() }
+                            .disabled(host.isEmpty || tokenUser.isEmpty || tokenPass.isEmpty)
                     } else {
                         Button("Connect") { connectAndSave() }
                             .disabled(host.isEmpty || username.isEmpty || password.isEmpty)
@@ -469,6 +513,10 @@ struct ServerFormView: View {
                     let stored = existing.password
                     password = stored ?? ""
                     savePassword = stored != nil
+                    if let token = existing.loginToken {
+                        tokenUser = token.user
+                        tokenPass = token.pass
+                    }
                 }
             }
         }
@@ -497,7 +545,10 @@ struct ServerFormView: View {
         profile.authMethod = authMethod
         profile.urlKey = urlKey.trimmingCharacters(in: .whitespacesAndNewlines)
         profile.staySignedIn = staySignedIn
-        profile.autoConnect = autoConnect && (authMethod == .sso || savePassword || staySignedIn)
+        // A token profile always has durable credentials, so auto-connect is
+        // never gated on a saved password.
+        profile.autoConnect = autoConnect && (authMethod == .sso || authMethod == .token
+                                              || savePassword || staySignedIn)
         return profile
     }
 
@@ -521,6 +572,33 @@ struct ServerFormView: View {
                     profile.loginToken = nil   // opted out — stop using any stored token
                 }
                 onSave(profile, savePassword ? password : "")
+                app.connection = connection
+                dismiss()
+            } catch {
+                if case .failed(let message) = connection.state {
+                    connectError = message
+                } else {
+                    connectError = ConnectionAdvice.message(for: error, profile: profile)
+                }
+            }
+        }
+    }
+
+    /// Verifies a hand-entered login token before saving it, so a typo surfaces
+    /// here rather than as a mysterious failure on the next launch.
+    private func connectAndSaveToken() {
+        let profile = buildProfile()
+        connecting = true
+        connectError = nil
+        let connection = MeshServerConnection(profile: profile)
+        let user = tokenUser.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pass = tokenPass.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { connecting = false }
+            do {
+                try await connection.connect(tokenUser: user, tokenPass: pass)
+                profile.loginToken = (user, pass)   // Keychain
+                onSave(profile, "")
                 app.connection = connection
                 dismiss()
             } catch {

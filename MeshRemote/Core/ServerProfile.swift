@@ -4,6 +4,11 @@ import Foundation
 enum AuthMethod: String, Codable {
     case password   // local account: username + password via x-meshauth
     case sso        // external/SSO account: browser login, session cookie
+    /// A login token minted by hand in the MeshCentral web interface. The way in
+    /// for accounts whose identity provider can't complete a sign-in inside an
+    /// embedded web view — passkey-only providers such as Pocket ID, where the
+    /// passkey is scoped to a domain this app can't declare.
+    case token
 }
 
 /// A saved MeshCentral server. Passwords/session cookies live in the Keychain, keyed by profile id.
