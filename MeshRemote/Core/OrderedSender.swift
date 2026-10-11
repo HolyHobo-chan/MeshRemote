@@ -45,8 +45,22 @@ final class OrderedSender {
         }
     }
 
-    func finish() {
+    /// Stops taking new messages, lets everything already queued go out, then
+    /// closes `socket`. Sessions queue a final "close" just before stopping;
+    /// cancelling the queue outright would drop it, leaving the agent to see an
+    /// abrupt disconnect instead of a clean end. A stalled send can't hold the
+    /// socket open — after a second it's closed anyway, which fails the send.
+    func finish(closing socket: MeshWebSocket) {
         continuation.finish()
-        task.cancel()
+        let drain = task
+        Task {
+            let deadline = Task {
+                guard (try? await Task.sleep(for: .seconds(1))) != nil else { return }
+                socket.close()
+            }
+            await drain.value
+            deadline.cancel()
+            socket.close()
+        }
     }
 }

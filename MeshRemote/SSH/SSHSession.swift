@@ -61,9 +61,11 @@ final class SSHSession {
     func stop() {
         stopped = true
         receiveTask?.cancel()
-        sender?.finish()
+        // Let anything already queued go out before the socket shuts.
+        if let socket {
+            if let sender { sender.finish(closing: socket) } else { socket.close() }
+        }
         sender = nil
-        socket?.close()
         socket = nil
         if case .closed = state {} else { state = .closed(nil) }
     }

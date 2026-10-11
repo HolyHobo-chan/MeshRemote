@@ -74,9 +74,11 @@ final class TerminalSession {
         sendControl(["ctrlChannel": "102938", "type": "close"])
         rttTask?.cancel()
         receiveTask?.cancel()
-        sender?.finish()
+        // Let anything queued (e.g. the "close" above) go out before the socket shuts.
+        if let socket {
+            if let sender { sender.finish(closing: socket) } else { socket.close() }
+        }
         sender = nil
-        socket?.close()
         socket = nil
         if case .closed = state {} else { state = .closed(nil) }
     }

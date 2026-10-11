@@ -135,9 +135,11 @@ final class FilesSession {
         stopped = true
         sendControlText(["ctrlChannel": "102938", "type": "close"])
         receiveTask?.cancel()
-        sender?.finish()
+        // Let anything queued (e.g. the "close" above) go out before the socket shuts.
+        if let socket {
+            if let sender { sender.finish(closing: socket) } else { socket.close() }
+        }
         sender = nil
-        socket?.close()
         socket = nil
         downloader?.cancel()
         downloader = nil

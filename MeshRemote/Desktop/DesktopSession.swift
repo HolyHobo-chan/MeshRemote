@@ -105,9 +105,15 @@ final class DesktopSession {
     // Framebuffer, internally synchronized on its own queue.
     private let framebuffer = KVMFramebuffer()
 
-    init(connection: MeshServerConnection, node: MeshNode) {
+    /// `quality` and `restoreDisplay` carry the user's choices over from a
+    /// session this one replaces. Quality goes out in the post-connect setup
+    /// burst; the display is restored once the agent lists its displays.
+    init(connection: MeshServerConnection, node: MeshNode,
+         quality: DesktopQuality = .balanced, restoreDisplay: Int? = nil) {
         self.connection = connection
         self.node = node
+        self.quality = quality             // didSet doesn't fire during init
+        self.restoreDisplay = restoreDisplay
     }
 
     // MARK: - Lifecycle
@@ -137,18 +143,18 @@ final class DesktopSession {
         sendControl(["ctrlChannel": "102938", "type": "close"])
         receiveTask?.cancel()
         rttTask?.cancel()
-        sender?.finish()
+        // Let anything queued (e.g. the "close" above) go out before the socket shuts.
+        if let socket {
+            if let sender { sender.finish(closing: socket) } else { socket.close() }
+        }
         sender = nil
-        socket?.close()
         socket = nil
         if case .closed = state {} else { state = .closed(nil) }
     }
 
-    /// Pause/resume the stream (call when the app backgrounds/foregrounds).
-    func setPaused(_ paused: Bool) {
-        sendCommand(KVM.pause, payload: Data([paused ? 1 : 0]))
-        if !paused { sendCommand(KVM.refresh) }
-    }
+    /// A monitor still to be restored (see init). Readable so a session torn
+    /// down before the agent answered can pass the request on to its successor.
+    private(set) var restoreDisplay: Int?
 
     // MARK: - Send plumbing
 
@@ -351,6 +357,12 @@ final class DesktopSession {
             }
             displays = list
             if let sel = body.beUInt16(at: 6 + Int(count) * 2) { selectedDisplay = Int(sel) }
+            // Compare against what the agent says it picked rather than assuming
+            // a default, and only switch to a display that still exists.
+            if let wanted = restoreDisplay {
+                restoreDisplay = nil
+                if wanted != selectedDisplay, list.contains(wanted) { selectDisplay(wanted) }
+            }
 
         case KVM.message, KVM.alert:
             if let text = String(data: body.dropFirst(4), encoding: .utf8), !text.hasPrefix(".") {

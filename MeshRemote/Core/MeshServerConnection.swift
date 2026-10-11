@@ -500,12 +500,34 @@ final class MeshServerConnection {
     /// (p=1) to carry initial size/shell settings. Desktop/files pass nil.
     func openTunnel(nodeId: String, relayProtocol: RelayProtocol,
                     options: [String: Any]? = nil) async throws -> MeshWebSocket {
+        try await waitUntilConnected()
         do {
+            return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol, options: options)
+        } catch where state == .reconnecting || state == .connecting {
+            // Checked first: the control socket dropped while we were opening —
+            // typically the foreground probe finding that iOS killed it — so any
+            // error here, timeout included, means "wait for the redial", not
+            // "retry against the dead socket".
+            try await waitUntilConnected()
             return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol, options: options)
         } catch MeshError.timeout {
             invalidateCookies()
             return try await openTunnelOnce(nodeId: nodeId, relayProtocol: relayProtocol, options: options)
         }
+    }
+
+    /// Holds a tunnel open request until the control socket is usable. Sessions
+    /// coming back to the foreground start at the same moment the control
+    /// socket is being redialed, and a tunnel can't be opened without it.
+    private func waitUntilConnected(timeout: Duration = .seconds(15)) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while state == .reconnecting || state == .connecting {
+            guard ContinuousClock.now < deadline else {
+                throw MeshError.timeout("the server connection")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard state == .connected else { throw MeshError.notConnected }
     }
 
     private func openTunnelOnce(nodeId: String, relayProtocol: RelayProtocol,
@@ -563,7 +585,7 @@ final class MeshServerConnection {
     /// Opens the SSH terminal relay (a different endpoint from meshrelay).
     /// Returns the socket right after connection; the SSH auth dance happens on it.
     func openSSHTunnel(nodeId: String) async throws -> MeshWebSocket {
-        guard state == .connected else { throw MeshError.notConnected }
+        try await waitUntilConnected()
         let cookies = try await relayCookies()
         guard let url = profile.websocketURL(path: "sshterminalrelay.ashx", query: [
             URLQueryItem(name: "browser", value: "1"),

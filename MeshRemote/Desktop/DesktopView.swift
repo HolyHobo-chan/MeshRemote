@@ -210,6 +210,11 @@ struct DesktopView: View {
     @State private var session: DesktopSession?
     /// Bumped to ask the task below for a fresh session after a disconnect.
     @State private var attempt = 0
+    /// What the user picked in a session we tore down, re-applied to the next one.
+    @State private var carried: (quality: DesktopQuality, display: Int)?
+    /// Set when we tore the session down for backgrounding, so returning to the
+    /// foreground knows to bring it back.
+    @State private var resumeOnActive = false
     @State private var bridge = DesktopViewBridge()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -228,9 +233,8 @@ struct DesktopView: View {
                 case .closed(let message):
                     SessionEndedOverlay(message: message,
                                         onReconnect: {
-                                            session.stop()          // the shadowed parameter
-                                            self.session = nil      // the @State the task watches
-                                            self.attempt += 1
+                                            tearDown(session)
+                                            attempt += 1
                                         },
                                         onDismiss: { dismiss() })
                 case .connected:
@@ -249,7 +253,9 @@ struct DesktopView: View {
         }
         .task(id: attempt) {
             guard session == nil else { return }
-            let newSession = DesktopSession(connection: connection, node: node)
+            let newSession = DesktopSession(connection: connection, node: node,
+                                            quality: carried?.quality ?? .balanced,
+                                            restoreDisplay: carried?.display)
             session = newSession
             await newSession.start()
         }
@@ -257,13 +263,38 @@ struct DesktopView: View {
             session?.stop()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard let session, session.state == .connected else { return }
             switch phase {
-            case .background: session.setPaused(true)
-            case .active: session.setPaused(false)
-            default: break
+            case .background:
+                // Don't pause and resume the stream: the tiles that arrive after a
+                // resume are deltas against a screen we no longer match, which
+                // leaves a half-updated picture. Start over on return instead.
+                guard let session else { return }
+                // A session that already ended stays ended — its overlay explains
+                // why (consent denied, an error), and silently redialing would
+                // prompt the remote user again without anyone asking.
+                if case .closed = session.state { return }
+                tearDown(session)
+                resumeOnActive = true
+            case .active:
+                guard resumeOnActive else { return }
+                resumeOnActive = false
+                attempt += 1
+            default:
+                break   // .inactive (Control Center, app switcher peek) keeps the session
             }
         }
+    }
+
+    /// Ends `old` and clears it so the task above can open a replacement,
+    /// remembering the user's quality and monitor for that replacement.
+    private func tearDown(_ old: DesktopSession) {
+        // A restore the agent hadn't answered yet is still the user's choice.
+        carried = (old.quality, old.restoreDisplay ?? old.selectedDisplay)
+        old.stop()
+        session = nil
+        // The canvas that held first responder goes away with the session, so the
+        // keyboard closes with it; keep the special-keys bar in step.
+        bridge.keyboardVisible = false
     }
 
     @ToolbarContentBuilder
