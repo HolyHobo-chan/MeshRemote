@@ -34,12 +34,15 @@ struct SSHTerminalHostView: UIViewRepresentable {
             self.session = session
         }
 
+        // SwiftTerm calls these from UIKit on the main thread. Handle them in
+        // place: a Task per keystroke doesn't guarantee delivery order, so fast
+        // typing or a pasted block could reach the shell scrambled.
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            Task { @MainActor in self.session.sendInput(data) }
+            MainActor.assumeIsolated { session.sendInput(data) }
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            Task { @MainActor in self.session.resize(cols: newCols, rows: newRows) }
+            MainActor.assumeIsolated { session.resize(cols: newCols, rows: newRows) }
         }
 
         func setTerminalTitle(source: TerminalView, title: String) { }

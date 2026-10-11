@@ -25,8 +25,17 @@ enum WSError: Error, LocalizedError {
 /// Thin wrapper over URLSessionWebSocketTask: optional self-signed-cert trust,
 /// custom headers, and an async receive stream.
 final class MeshWebSocket: NSObject, @unchecked Sendable {
-    private var task: URLSessionWebSocketTask?
-    private var session: URLSession?
+    // This state is reached from the main actor (connect/receive/close), the
+    // send queue's background task, watchdog tasks and URLSession's delegate
+    // queue, so every access goes through `lock` — that's what makes the
+    // @unchecked Sendable above true rather than just asserted.
+    private let lock = NSLock()
+    private var _task: URLSessionWebSocketTask?
+    private var _session: URLSession?
+    private var _openContinuation: CheckedContinuation<Void, Error>?
+
+    private var task: URLSessionWebSocketTask? { lock.withLock { _task } }
+
     private let allowSelfSigned: Bool
     private let expectedHost: String
 
@@ -43,26 +52,34 @@ final class MeshWebSocket: NSObject, @unchecked Sendable {
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        self.session = session
+        _session = session
 
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 32 * 1024 * 1024
-        self.task = task
+        _task = task
     }
 
     /// Opens the socket and completes once connected (or throws on failure).
     func connect() async throws {
         guard let task else { throw WSError.notConnected }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            openContinuation = cont
+            lock.withLock { _openContinuation = cont }
             task.resume()
         }
     }
 
-    private var openContinuation: CheckedContinuation<Void, Error>?
+    /// Hands the open result to connect() exactly once, whichever delegate
+    /// callback arrives first. Resumed outside the lock.
+    private func finishOpen(_ result: Result<Void, Error>) {
+        let cont = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            defer { _openContinuation = nil }
+            return _openContinuation
+        }
+        cont?.resume(with: result)
+    }
 
     func send(text: String) async throws {
         guard let task else { throw WSError.notConnected }
@@ -85,10 +102,12 @@ final class MeshWebSocket: NSObject, @unchecked Sendable {
     }
 
     func close() {
+        let (task, session) = lock.withLock { () -> (URLSessionWebSocketTask?, URLSession?) in
+            defer { _task = nil; _session = nil }
+            return (_task, _session)
+        }
         task?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()
-        task = nil
-        session = nil
     }
 
     deinit { close() }
@@ -97,21 +116,18 @@ final class MeshWebSocket: NSObject, @unchecked Sendable {
 extension MeshWebSocket: URLSessionWebSocketDelegate, URLSessionDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocol: String?) {
-        openContinuation?.resume()
-        openContinuation = nil
+        finishOpen(.success(()))
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) }
-        openContinuation?.resume(throwing: WSError.closed(code: closeCode, reason: reasonText))
-        openContinuation = nil
+        finishOpen(.failure(WSError.closed(code: closeCode, reason: reasonText)))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error {
-            openContinuation?.resume(throwing: error)
-            openContinuation = nil
+            finishOpen(.failure(error))
         }
     }
 

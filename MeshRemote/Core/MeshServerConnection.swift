@@ -14,6 +14,10 @@ enum ConnectionState: Equatable {
 enum MeshError: Error, LocalizedError {
     case badServerAddress
     case authFailed(String)
+    /// The server refused these credentials outright (bad password, revoked or
+    /// expired token). Distinct from authFailed so callers can tell "these
+    /// credentials are dead" from "this attempt failed" (IP ban, missing key).
+    case credentialsRejected
     case twoFactorRequired
     case notConnected
     case timeout(String)
@@ -23,6 +27,7 @@ enum MeshError: Error, LocalizedError {
         switch self {
         case .badServerAddress: return "Invalid server address."
         case .authFailed(let m): return m
+        case .credentialsRejected: return "Invalid username or password."
         case .twoFactorRequired: return "This account requires a two-factor code."
         case .notConnected: return "Not connected to the server."
         case .timeout(let what): return "Timed out waiting for \(what)."
@@ -142,6 +147,7 @@ final class MeshServerConnection {
             // The server pushes serverinfo then userinfo on success, or a close message.
             try await waitForLogin(socket: socket)
         } catch {
+            socket.close()   // a rejected login leaves the socket open otherwise
             self.socket = nil
             state = .failed(ConnectionAdvice.message(for: error, profile: profile))
             throw error
@@ -185,6 +191,14 @@ final class MeshServerConnection {
         }
     }
 
+    /// What to tell the user about a failed connect: the server's own wording
+    /// when it answered (bad password, account locked), otherwise advice for
+    /// the network-level error, since it never got that far.
+    func failureMessage(for error: Error) -> String {
+        if case .failed(let message) = state { return message }
+        return ConnectionAdvice.message(for: error, profile: profile)
+    }
+
     /// Re-establishes the control channel by replaying the headers that worked
     /// the first time. Leaves the UI in place: a quick app switch shouldn't dump
     /// the user back to the server list.
@@ -214,6 +228,14 @@ final class MeshServerConnection {
                 guard let self else { return }
                 await self.reconnect()
                 if self.state == .connected { return }
+                // Between attempts we're still recovering, not failed: tunnels
+                // waiting on the connection should keep waiting, and the banner
+                // should keep saying "Reconnecting…" rather than flash an error.
+                // Only the last failure stands. (A cancelled task means sign-out,
+                // whose .disconnected must not be overwritten.)
+                if attempt < 2, !Task.isCancelled, case .failed = self.state {
+                    self.state = .reconnecting
+                }
             }
         }
     }
@@ -257,7 +279,7 @@ final class MeshServerConnection {
         case ("banned", _): return .authFailed("Too many attempts — this IP is temporarily banned by the server.")
         case ("notools", _): return .authFailed("This account is not permitted to use API clients.")
         case ("emailvalidation", _): return .authFailed("Verify the account email address before logging in.")
-        default: return .authFailed("Invalid username or password.")
+        default: return .credentialsRejected
         }
     }
 
@@ -361,7 +383,12 @@ final class MeshServerConnection {
                 handleEvent(event)
             }
         case "close":
+            // The server ended the session (revoked, account locked). Tear down
+            // here: markConnectionLost only acts on .connected, so once we report
+            // .failed nothing else would stop the heartbeat, the cookie timer or
+            // the socket.
             let err = closeError(json)
+            cleanup()
             state = .failed(err.localizedDescription)
         default:
             break
@@ -519,7 +546,11 @@ final class MeshServerConnection {
     /// Holds a tunnel open request until the control socket is usable. Sessions
     /// coming back to the foreground start at the same moment the control
     /// socket is being redialed, and a tunnel can't be opened without it.
-    private func waitUntilConnected(timeout: Duration = .seconds(15)) async throws {
+    /// The cap covers the whole retry budget in scheduleReconnect — a single
+    /// dial can take ~35s (socket timeout plus the login watchdog) — so a slow
+    /// but successful redial isn't reported as a failure. Cancelling the caller
+    /// (e.g. leaving the screen) ends the wait immediately.
+    private func waitUntilConnected(timeout: Duration = .seconds(120)) async throws {
         let deadline = ContinuousClock.now + timeout
         while state == .reconnecting || state == .connecting {
             guard ContinuousClock.now < deadline else {
@@ -553,6 +584,11 @@ final class MeshServerConnection {
         ]) else { throw MeshError.badServerAddress }
 
         let relay = MeshWebSocket(url: url, allowSelfSigned: profile.allowSelfSigned)
+        // Every failure below must close the relay explicitly: its URLSession
+        // retains it as delegate, so a dropped socket is never deallocated and
+        // would stay connected (and leak) for the life of the process.
+        var handedOff = false
+        defer { if !handedOff { relay.close() } }
         try await relay.connect()
 
         // Wait for 'c' or 'cr' (the agent may take a few seconds to dial in).
@@ -579,6 +615,7 @@ final class MeshServerConnection {
             try await relay.send(text: text)
         }
         try await relay.send(text: String(relayProtocol.rawValue))
+        handedOff = true
         return relay
     }
 
@@ -599,6 +636,7 @@ final class MeshServerConnection {
         do {
             try await relay.connect()
         } catch {
+            relay.close()   // see openTunnelOnce: an unclosed socket is never freed
             throw MeshError.relayFailed("Could not open an SSH session. Make sure SSH is enabled on the server (\"ssh\": true in the domain config).")
         }
         return relay

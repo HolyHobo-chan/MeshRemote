@@ -10,6 +10,8 @@ enum ConnectionAdvice {
             switch mesh {
             case .authFailed(let message):
                 return message
+            case .credentialsRejected:
+                return "Invalid username or password."
             case .twoFactorRequired:
                 return "This account requires a two-factor code. Edit the server and enter a current code before connecting."
             case .badServerAddress:

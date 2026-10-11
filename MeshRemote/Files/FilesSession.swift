@@ -154,8 +154,15 @@ final class FilesSession {
         isLoading = true
         lastError = nil
         requestCounter += 1
+        latestListReqId = requestCounter
         sendJSON(["action": "ls", "reqid": requestCounter, "path": currentPath])
     }
+
+    /// reqid of the newest listing asked for. Replies to older ones are dropped:
+    /// tapping into A then quickly into B, A's slower reply would otherwise show
+    /// A's files under B's path — and enter, rename or delete would then act on
+    /// B/<name>, a path that's missing or, worse, a different file.
+    private var latestListReqId: Int?
 
     func enter(_ entry: FileEntry) async {
         guard entry.kind != .file else { return }
@@ -399,6 +406,8 @@ final class FilesSession {
     }
 
     private func handleListing(_ json: [String: Any]) {
+        // Stale: a newer listing is on its way, and it owns the spinner too.
+        if let reqid = json["reqid"] as? Int, let latest = latestListReqId, reqid != latest { return }
         isLoading = false
         guard let dir = json["dir"] as? [[String: Any]] else {
             lastError = "This folder can't be read."

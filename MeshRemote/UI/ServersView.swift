@@ -283,11 +283,7 @@ struct ServersView: View {
                 // The server's own rejection message (bad password, account
                 // locked) beats anything we can infer; fall back to advice
                 // when the failure happened before the server ever answered.
-                if case .failed(let message) = connection.state {
-                    connectError = message
-                } else {
-                    connectError = ConnectionAdvice.message(for: error, profile: profile)
-                }
+                connectError = connection.failureMessage(for: error)
             }
         }
     }
@@ -307,10 +303,14 @@ struct ServersView: View {
                     profile.sessionCookie = nil
                 }
                 app.connection = connection
-            } catch {
-                // The saved session likely expired — clear it and prompt a fresh sign-in.
+            } catch MeshError.credentialsRejected {
+                // The saved session expired — clear it and prompt a fresh sign-in.
                 profile.sessionCookie = nil
                 ssoProfile = profile
+            } catch {
+                // Offline, server restarting, VPN not up: says nothing about the
+                // cookie, and the sign-in page wouldn't load either. Keep it.
+                connectError = connection.failureMessage(for: error)
             }
         }
     }
@@ -323,9 +323,9 @@ struct ServersView: View {
             do {
                 try await connection.connect(tokenUser: token.user, tokenPass: token.pass)
                 app.connection = connection
-            } catch {
-                // Token revoked or invalid — clear it and fall back to a fresh sign-in
-                // appropriate to the account type.
+            } catch MeshError.credentialsRejected {
+                // The server refused the token (revoked or expired) — only now is it
+                // safe to forget it and fall back to a fresh sign-in.
                 profile.loginToken = nil
                 switch profile.authMethod {
                 case .sso:
@@ -342,6 +342,11 @@ struct ServersView: View {
                     connectError = "This login token is no longer valid. Create a new one in MeshCentral and enter it here."
                     editingProfile = profile
                 }
+            } catch {
+                // Offline, server restarting, VPN not up, IP ban: none of that means
+                // the token is bad, and a hand-made one can't be re-minted from here.
+                // Keep it and just report the failure.
+                connectError = connection.failureMessage(for: error)
             }
         }
     }
@@ -552,6 +557,17 @@ struct ServerFormView: View {
         return profile
     }
 
+    /// True when an edit points this profile at a different account or server.
+    /// A login token minted for the old one must then be dropped: startConnect
+    /// prefers a stored token, so keeping it would sign in as the previous user —
+    /// or send that user's durable token to a server that never issued it.
+    private func accountChanged(_ profile: ServerProfile) -> Bool {
+        guard let existing else { return false }
+        return existing.host != profile.host
+            || existing.username != profile.username
+            || existing.authMethod != profile.authMethod
+    }
+
     private func connectAndSave() {
         let profile = buildProfile()
         connecting = true
@@ -562,6 +578,9 @@ struct ServerFormView: View {
             do {
                 try await connection.connect(password: password,
                                              token: twoFactorCode.isEmpty ? nil : twoFactorCode)
+                // Cleared only now that the new login worked, so a failed edit
+                // leaves the original server's token intact.
+                if accountChanged(profile) { profile.loginToken = nil }
                 // "Stay signed in": mint a durable login token now, while we hold a
                 // valid (2FA-satisfied) session, so future connects skip it entirely.
                 if staySignedIn {
@@ -575,11 +594,7 @@ struct ServerFormView: View {
                 app.connection = connection
                 dismiss()
             } catch {
-                if case .failed(let message) = connection.state {
-                    connectError = message
-                } else {
-                    connectError = ConnectionAdvice.message(for: error, profile: profile)
-                }
+                connectError = connection.failureMessage(for: error)
             }
         }
     }
@@ -602,11 +617,7 @@ struct ServerFormView: View {
                 app.connection = connection
                 dismiss()
             } catch {
-                if case .failed(let message) = connection.state {
-                    connectError = message
-                } else {
-                    connectError = ConnectionAdvice.message(for: error, profile: profile)
-                }
+                connectError = connection.failureMessage(for: error)
             }
         }
     }
@@ -614,6 +625,10 @@ struct ServerFormView: View {
     /// The SSO web login succeeded and handed back a session cookie. `profile` is
     /// the same instance the web view used, so its id (and Keychain items) are stable.
     private func completeSSO(_ profile: ServerProfile, cookie: String) {
+        // Cleared up front, unlike connectAndSave: this path saves the edited
+        // profile before connecting, so a stale token would otherwise outlive
+        // a failed connect and be sent to the new server on the next tap.
+        if accountChanged(profile) { profile.loginToken = nil }
         profile.sessionCookie = cookie          // store in Keychain
         onSave(profile, "")                     // persist the profile
         connecting = true
