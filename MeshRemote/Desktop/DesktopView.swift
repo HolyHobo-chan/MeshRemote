@@ -203,6 +203,18 @@ struct DesktopHostView: UIViewRepresentable {
     }
 }
 
+/// Which session remote desktop attaches to on a multi-user Windows device.
+private enum SessionTarget: Equatable {
+    case undecided
+    case console          // the physical console — what the agent shows without a tsid
+    case session(Int)
+
+    var tsid: Int? {
+        if case .session(let id) = self { return id }
+        return nil
+    }
+}
+
 struct DesktopView: View {
     let connection: MeshServerConnection
     let node: MeshNode
@@ -215,6 +227,12 @@ struct DesktopView: View {
     /// Set when we tore the session down for backgrounding, so returning to the
     /// foreground knows to bring it back.
     @State private var resumeOnActive = false
+    /// Whose desktop to show. Decided once per visit, as the web client's Connect
+    /// button does, then kept so Reconnect and returning from the background go
+    /// back to the same user's session without asking again.
+    @State private var target: SessionTarget = .undecided
+    /// Signed-in sessions to choose between, while the picker is showing.
+    @State private var sessionChoices: [UserSession]?
     @State private var bridge = DesktopViewBridge()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -240,6 +258,13 @@ struct DesktopView: View {
                 case .connected:
                     EmptyView()
                 }
+            } else if let choices = sessionChoices {
+                SessionPickerOverlay(sessions: choices,
+                                     onSelect: { choose($0) },
+                                     onCancel: { dismiss() })
+            } else {
+                // Asking the agent who's signed in, before there's a session to show.
+                ConnectingOverlay(label: "Connecting to \(node.name)…")
             }
         }
         .navigationTitle(node.name)
@@ -253,7 +278,14 @@ struct DesktopView: View {
         }
         .task(id: attempt) {
             guard session == nil else { return }
+            if target == .undecided {
+                target = await resolveTarget()
+                // Leaving the screen cancels this task; don't open a session
+                // after the view that would tear it down has gone.
+                guard !Task.isCancelled, target != .undecided else { return }   // or the picker is up
+            }
             let newSession = DesktopSession(connection: connection, node: node,
+                                            tsid: target.tsid,
                                             quality: carried?.quality ?? .balanced,
                                             restoreDisplay: carried?.display)
             session = newSession
@@ -283,6 +315,35 @@ struct DesktopView: View {
                 break   // .inactive (Control Center, app switcher peek) keeps the session
             }
         }
+    }
+
+    /// Mirrors the web client's Connect button: nobody signed in → the console;
+    /// one session → straight into it; several → let the user pick. If the agent
+    /// doesn't answer, fall back to the console, as remote desktop always did.
+    private func resolveTarget() async -> SessionTarget {
+        guard node.offersSessionChoice,
+              let sessions = await connection.userSessions(nodeId: node.id) else { return .console }
+        let usable = sessions.filter(\.isSelectable).sorted { $0.id < $1.id }
+        switch usable.count {
+        case 0: return .console
+        case 1: return .session(usable[0].id)
+        default:
+            sessionChoices = usable
+            return .undecided
+        }
+    }
+
+    private func choose(_ chosen: UserSession) {
+        sessionChoices = nil
+        target = .session(chosen.id)
+        attempt += 1
+    }
+
+    /// Back to the picker, for looking at a different signed-in user's desktop.
+    private func switchUser() {
+        if let session { tearDown(session) }
+        target = .undecided
+        attempt += 1
     }
 
     /// Ends `old` and clears it so the task above can open a replacement,
@@ -330,6 +391,12 @@ struct DesktopView: View {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    if node.offersSessionChoice {
+                        Button("Switch User", systemImage: "person.2") {
+                            switchUser()
                         }
                     }
 
@@ -475,5 +542,62 @@ struct SessionEndedOverlay: View {
         .padding(28)
         .frame(maxWidth: 320)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+/// Lets the user choose whose desktop to view when several people are signed
+/// in to a Windows device — the same choice MeshCentral's web client offers.
+struct SessionPickerOverlay: View {
+    let sessions: [UserSession]
+    let onSelect: (UserSession) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(.secondary)
+            Text("Choose a session")
+                .font(.headline)
+            Text("Several users are signed in to this device.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 8) {
+                ForEach(sessions) { session in
+                    Button { onSelect(session) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: session.station == "Console" ? "desktopcomputer" : "person.crop.circle")
+                                .font(.title3)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.account ?? "No one signed in")
+                                    .font(.callout.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text([session.state, session.station].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Button("Cancel", action: onCancel)
+                .font(.subheadline)
+        }
+        .padding(24)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .padding(.horizontal, 20)
     }
 }

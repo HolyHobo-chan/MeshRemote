@@ -44,6 +44,11 @@ struct MeshNode: Identifiable, Hashable {
     /// value means a legacy/unknown agent, which we optimistically treat as capable.
     var supportsTerminal: Bool { agentCaps == nil || (agentCaps! & 2) != 0 }
 
+    /// Whether remote desktop can attach to a particular signed-in user's
+    /// session rather than the physical console. MeshCentral's web client offers
+    /// that choice only for Windows agents (agent ids 1–4); we do the same.
+    var offersSessionChoice: Bool { agentId.map { (1...4).contains($0) } ?? false }
+
     init?(json: [String: Any], meshId: String) {
         guard let id = json["_id"] as? String else { return nil }
         self.id = id
@@ -115,6 +120,36 @@ struct MeshNode: Identifiable, Hashable {
 
 enum OSFamily {
     case windows, linux, macos, mobile, other
+}
+
+/// A signed-in user session on a device, as the agent reports it in reply to
+/// a "userSessions" request.
+struct UserSession: Identifiable, Hashable {
+    let id: Int              // Windows session id — the agent's "tsid"
+    let state: String        // "Active", "Connected", "Disconnected", …
+    let station: String?     // "Console", "RDP-Tcp#3", …
+    let username: String?
+    let domain: String?
+
+    init?(json: [String: Any]) {
+        // SessionId arrives as a number or a numeric string depending on the agent.
+        if let n = json["SessionId"] as? Int { id = n }
+        else if let s = json["SessionId"] as? String, let n = Int(s) { id = n }
+        else { return nil }
+        state = json["State"] as? String ?? ""
+        station = json["StationName"] as? String
+        username = (json["Username"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        domain = (json["Domain"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// The web client's rule: show sessions someone is using, plus the console.
+    var isSelectable: Bool { state == "Active" || state == "Connected" || station == "Console" }
+
+    /// "DOMAIN\user", or just the user when there's no domain.
+    var account: String? {
+        guard let username else { return nil }
+        return domain.map { "\($0)\\\(username)" } ?? username
+    }
 }
 
 struct ServerInfo {

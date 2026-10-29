@@ -105,13 +105,18 @@ final class DesktopSession {
     // Framebuffer, internally synchronized on its own queue.
     private let framebuffer = KVMFramebuffer()
 
+    /// Windows session to attach to (a signed-in user's desktop rather than the
+    /// console), sent in the tunnel's options frame. Nil means the console.
+    private let tsid: Int?
+
     /// `quality` and `restoreDisplay` carry the user's choices over from a
     /// session this one replaces. Quality goes out in the post-connect setup
     /// burst; the display is restored once the agent lists its displays.
-    init(connection: MeshServerConnection, node: MeshNode,
+    init(connection: MeshServerConnection, node: MeshNode, tsid: Int? = nil,
          quality: DesktopQuality = .balanced, restoreDisplay: Int? = nil) {
         self.connection = connection
         self.node = node
+        self.tsid = tsid
         self.quality = quality             // didSet doesn't fire during init
         self.restoreDisplay = restoreDisplay
     }
@@ -122,7 +127,11 @@ final class DesktopSession {
 
     func start() async {
         do {
-            let socket = try await connection.openTunnel(nodeId: node.id, relayProtocol: .desktop)
+            // Same frame MeshCentral's web client sends: the agent reads `tsid` from it
+            // and attaches the desktop to that user's session.
+            let options: [String: Any]? = tsid.map { ["type": "options", "tsid": $0] }
+            let socket = try await connection.openTunnel(nodeId: node.id, relayProtocol: .desktop,
+                                                         options: options)
             // The view may have been dismissed during the connect await; if so,
             // don't start a session nothing will ever tear down.
             guard !stopped else { socket.close(); return }

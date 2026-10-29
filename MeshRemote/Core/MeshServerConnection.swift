@@ -64,6 +64,10 @@ final class MeshServerConnection {
 
     // Awaits a createLoginToken response.
     private var tokenWaiter: CheckedContinuation<(user: String, pass: String)?, Never>?
+    // Requests awaiting a reply, keyed by the tag sent with each one, so a late
+    // answer to an abandoned request can't satisfy a newer one. Each entry
+    // decodes its own reply; nil means no reply (timeout or disconnect).
+    private var replyWaiters: [Int: ([String: Any]?) -> Void] = [:]
 
     // The headers that produced the current session, replayed to reconnect
     // after iOS tears the socket down. Memory only — never persisted.
@@ -301,6 +305,10 @@ final class MeshServerConnection {
         heartbeatTask = nil
         invalidateCookies()
         if let waiter = tokenWaiter { tokenWaiter = nil; waiter.resume(returning: nil) }
+        // No reply can arrive on a closed socket; answer now rather than at the timeout.
+        let waiters = replyWaiters.values
+        replyWaiters.removeAll()
+        waiters.forEach { $0(nil) }
         socket?.close()
         socket = nil
     }
@@ -378,6 +386,12 @@ final class MeshServerConnection {
                     waiter.resume(returning: nil)   // server refused (result: error)
                 }
             }
+        case "msg":
+            // A reply to request(_:): the server echoes our tag back. Anything
+            // without one of our tags isn't for us.
+            guard let tag = (json["tag"] as? Int) ?? (json["tag"] as? String).flatMap(Int.init),
+                  let waiter = replyWaiters.removeValue(forKey: tag) else { break }
+            waiter(json)
         case "event":
             if let event = json["event"] as? [String: Any] {
                 handleEvent(event)
@@ -452,6 +466,40 @@ final class MeshServerConnection {
     /// can reconnect without signing in again. Returns nil if the server refuses
     /// (e.g. login tokens disabled) or times out — the caller then falls back to
     /// the session cookie. `expire: 0` means the token never expires.
+    /// Asks a device's agent which users are signed in, for the remote-desktop
+    /// session picker (what the web client's Connect button does). Nil when the
+    /// agent doesn't answer in time; callers then connect to the console, which
+    /// is what remote desktop always did before.
+    func userSessions(nodeId: String) async -> [UserSession]? {
+        await request(["action": "msg", "type": "userSessions", "nodeid": nodeId]) { reply in
+            guard reply["type"] as? String == "userSessions" else { return nil }
+            // The agent sends an object keyed by session id; accept a plain array too.
+            let entries = (reply["data"] as? [String: [String: Any]]).map { Array($0.values) }
+                ?? (reply["data"] as? [[String: Any]]) ?? []
+            return entries.compactMap(UserSession.init(json:))
+        }
+    }
+
+    /// Sends `command` with a fresh tag and waits for the reply the server
+    /// routes back with that tag, decoded by `decode`. Nil on timeout.
+    private func request<T>(_ command: [String: Any], timeout: Duration = .seconds(8),
+                            decode: @escaping ([String: Any]) -> T?) async -> T? {
+        // Ride out a redial in progress (e.g. just back from the background)
+        // rather than reporting a missing answer.
+        guard (try? await waitUntilConnected()) != nil else { return nil }
+        let tag = Int.random(in: 1...Int(Int32.max))
+        return await withCheckedContinuation { (cont: CheckedContinuation<T?, Never>) in
+            replyWaiters[tag] = { reply in cont.resume(returning: reply.flatMap(decode)) }
+            var message = command
+            message["tag"] = tag
+            Task { try? await sendJSON(message) }
+            Task {
+                try? await Task.sleep(for: timeout)
+                replyWaiters.removeValue(forKey: tag)?(nil)
+            }
+        }
+    }
+
     func createLoginToken(name: String = "MeshRemote (iOS)") async -> (user: String, pass: String)? {
         guard state == .connected, tokenWaiter == nil else { return nil }
         return await withCheckedContinuation { cont in
