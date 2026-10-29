@@ -398,7 +398,7 @@ struct ServerFormView: View {
                 } header: {
                     Text("Server")
                 } footer: {
-                    Text("You can paste a full server URL — MeshRemote keeps the address and pulls out the login key. The login key is the ?key= value some servers require in the URL; leave it blank unless your server uses one.")
+                    Text("You can paste a full server URL — MeshRemote keeps the address and pulls out the login key. For a MeshCentral domain other than the default, include its path (host.example.com/domain1). The login key is the ?key= value some servers require in the URL; leave it blank unless your server uses one.")
                 }
 
                 Section {

@@ -6,7 +6,7 @@ import Foundation
 /// pieces the form needs, rather than letting the connection fail on it.
 enum ServerAddress {
     struct Parsed: Equatable {
-        var host: String     // host[:port], no scheme and no path
+        var host: String     // host[:port] plus any domain path ("/domain1"), no scheme
         var key: String?     // the ?key= login key, when the URL carried one
     }
 
@@ -23,6 +23,13 @@ enum ServerAddress {
         // platforms hand back the brackets already, so only add them if missing.
         var result = (host.contains(":") && !host.hasPrefix("[")) ? "[\(host)]" : host
         if let port = comps.port, port != 443 { result += ":\(port)" }
+
+        // MeshCentral serves each non-default domain under a path
+        // (https://server/domain1/), so keep it. A trailing page or endpoint
+        // (".../login.htm", ".../control.ashx") isn't part of the domain.
+        var segments = comps.path.split(separator: "/")
+        if segments.last?.contains(".") == true { segments.removeLast() }
+        if !segments.isEmpty { result += "/" + segments.joined(separator: "/") }
 
         let key = comps.queryItems?.first { $0.name == "key" }?.value
         return Parsed(host: result, key: (key?.isEmpty == false) ? key : nil)

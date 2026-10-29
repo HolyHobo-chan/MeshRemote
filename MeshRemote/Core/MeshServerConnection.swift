@@ -615,8 +615,9 @@ final class MeshServerConnection {
         let cookies = try await relayCookies()
         let tunnelId = Self.randomHex(12)
 
-        // Agent side (via control channel). The value is server-relative ('*' prefix).
-        let agentURL = "*/meshrelay.ashx?p=\(relayProtocol.rawValue)&nodeid=\(nodeId)&id=\(tunnelId)&rauth=\(cookies.rauth)"
+        // Agent side (via control channel). The value is server-relative ('*'
+        // prefix) and, like the web client's, includes the domain path.
+        let agentURL = "*\(profile.domainPath)/meshrelay.ashx?p=\(relayProtocol.rawValue)&nodeid=\(nodeId)&id=\(tunnelId)&rauth=\(cookies.rauth)"
         try await sendJSON([
             "action": "msg", "type": "tunnel", "nodeid": nodeId,
             "value": agentURL, "usage": relayProtocol.rawValue

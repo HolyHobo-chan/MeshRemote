@@ -15,7 +15,7 @@ enum AuthMethod: String, Codable {
 struct ServerProfile: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var displayName: String = ""
-    var host: String = ""            // hostname[:port], no scheme
+    var host: String = ""            // hostname[:port][/domain], no scheme
     var username: String = ""
     var allowSelfSigned: Bool = false
     var autoConnect: Bool = false    // connect to this server on app launch
@@ -53,9 +53,16 @@ struct ServerProfile: Identifiable, Codable, Hashable {
         var text = host.trimmingCharacters(in: .whitespacesAndNewlines)
         text = text.replacingOccurrences(of: "https://", with: "")
         text = text.replacingOccurrences(of: "wss://", with: "")
-        if text.hasSuffix("/") { text.removeLast() }
+        while text.hasSuffix("/") { text.removeLast() }
         guard !text.isEmpty else { return nil }
         return URL(string: "https://\(text)")
+    }
+
+    /// The MeshCentral domain's URL path ("/domain1"), or "" for the default
+    /// domain. Every endpoint lives under it.
+    var domainPath: String {
+        guard let path = baseURL?.path, path != "/" else { return "" }
+        return path
     }
 
     func websocketURL(path: String, query: [URLQueryItem] = []) -> URL? {
@@ -77,7 +84,7 @@ struct ServerProfile: Identifiable, Codable, Hashable {
         guard let base = baseURL,
               var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
         comps.scheme = scheme
-        if !path.isEmpty { comps.path = "/" + path }
+        comps.path = domainPath + "/" + path
         var items = query
         if !urlKey.isEmpty { items.append(URLQueryItem(name: "key", value: urlKey)) }
         comps.queryItems = items.isEmpty ? nil : items
